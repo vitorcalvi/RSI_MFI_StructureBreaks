@@ -19,8 +19,8 @@ class TelegramNotifier:
             
         try:
             await self.bot.send_message(chat_id=self.chat_id, text=message)
-        except:
-            pass
+        except Exception as e:
+            print(f"Telegram send error: {e}")
     
     async def trade_opened(self, symbol, price, size):
         """Notify when trade is opened"""

@@ -1,288 +1,296 @@
 #!/usr/bin/env python3
 """
-Test Trading Cycle - Test going long, closing, going short, and closing
+Streamlined Testnet Trading Test
+Quick test to verify trading functionality on Bybit testnet
 """
 
+import asyncio
 import os
 import sys
-import asyncio
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
+from pybit.unified_trading import HTTP
 
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Simple color output
+class Colors:
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    RESET = '\033[0m'
 
-from dotenv import load_dotenv
-load_dotenv()
+def print_success(msg):
+    print(f"{Colors.GREEN}✅ {msg}{Colors.RESET}")
 
-# Import the components
-from core.trade_engine import TradeEngine
-from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
+def print_error(msg):
+    print(f"{Colors.RED}❌ {msg}{Colors.RESET}")
 
-async def test_trading_cycle():
-    """Test a complete trading cycle: long -> close -> short -> close"""
-    
-    print("🧪 TESTING TRADING CYCLE")
-    print("=" * 60)
-    print("This test will simulate:")
-    print("1. Opening a LONG position")
-    print("2. Closing the LONG position") 
-    print("3. Opening a SHORT position")
-    print("4. Closing the SHORT position")
-    print("=" * 60)
-    
-    try:
-        # Initialize components
-        print("\n📦 Initializing components...")
-        engine = TradeEngine()
+def print_info(msg):
+    print(f"{Colors.BLUE}ℹ️  {msg}{Colors.RESET}")
+
+def print_warning(msg):
+    print(f"{Colors.YELLOW}⚠️  {msg}{Colors.RESET}")
+
+class TestnetTrader:
+    def __init__(self):
+        self.api_key = 'bTOThxe1hgVDm2iZV0'
+        self.api_secret = 'BpMTdZqTUXwlR9IW6Mk5qZmLbOgViBx8Nrcx'
+        self.symbol = 'SOLUSDT'
+        self.session = None
         
-        if not engine.demo_mode:
-            print("❌ Error: Bot must be in DEMO_MODE for testing")
-            print("Set DEMO_MODE=true in .env file")
+    def connect(self):
+        """Connect to Bybit testnet"""
+        try:
+            self.session = HTTP(
+                testnet=True,
+                api_key=self.api_key,
+                api_secret=self.api_secret
+            )
+            print_success("Connected to Bybit Testnet")
+            return True
+        except Exception as e:
+            print_error(f"Connection failed: {e}")
             return False
+    
+    def check_balance(self):
+        """Check USDT balance"""
+        try:
+            response = self.session.get_wallet_balance(accountType="UNIFIED")
             
-        print("✅ Trade engine initialized in DEMO mode")
-        
-        # Test symbol
-        symbol = 'SOL/USDT'
-        
-        # Get current market data
-        print(f"\n📊 Fetching market data for {symbol}...")
-        df = await engine.fetch_ohlcv(symbol, timeframe='1', limit=100)
-        
-        if df is None or len(df) < 50:
-            print("❌ Failed to fetch market data")
+            if response['retCode'] == 0:
+                for coin in response['result']['list'][0]['coin']:
+                    if coin['coin'] == 'USDT':
+                        balance = float(coin['walletBalance'])
+                        print_success(f"USDT Balance: ${balance:.2f}")
+                        return balance
+            else:
+                print_error(f"Balance check failed: {response['retMsg']}")
+                return 0
+        except Exception as e:
+            print_error(f"Balance error: {e}")
+            return 0
+    
+    def get_current_price(self):
+        """Get current market price"""
+        try:
+            response = self.session.get_tickers(
+                category="linear",
+                symbol=self.symbol
+            )
+            
+            if response['retCode'] == 0:
+                price = float(response['result']['list'][0]['lastPrice'])
+                print_info(f"Current {self.symbol} price: ${price:.4f}")
+                return price
+            else:
+                print_error("Failed to get price")
+                return None
+        except Exception as e:
+            print_error(f"Price error: {e}")
+            return None
+    
+    def check_position(self):
+        """Check current position"""
+        try:
+            response = self.session.get_positions(
+                category="linear",
+                symbol=self.symbol
+            )
+            
+            if response['retCode'] == 0:
+                positions = response['result']['list']
+                for pos in positions:
+                    if float(pos['size']) > 0:
+                        side = pos['side']
+                        size = float(pos['size'])
+                        avg_price = float(pos['avgPrice'])
+                        pnl = float(pos['unrealisedPnl'])
+                        print_info(f"Active {side} position: {size} contracts @ ${avg_price:.4f}, PnL: ${pnl:.2f}")
+                        return {
+                            'side': side,
+                            'size': size,
+                            'avg_price': avg_price,
+                            'pnl': pnl
+                        }
+                print_info("No active position")
+                return None
+            else:
+                print_error(f"Position check failed: {response['retMsg']}")
+                return None
+        except Exception as e:
+            print_error(f"Position error: {e}")
+            return None
+    
+    def place_order(self, side, contracts):
+        """Place a market order"""
+        try:
+            print_info(f"Placing {side} order for {contracts} contracts...")
+            
+            response = self.session.place_order(
+                category="linear",
+                symbol=self.symbol,
+                side=side,
+                orderType="Market",
+                qty=str(contracts),
+                positionIdx=0  # One-way mode
+            )
+            
+            if response['retCode'] == 0:
+                order_id = response['result']['orderId']
+                print_success(f"{side} order placed! Order ID: {order_id}")
+                return order_id
+            else:
+                print_error(f"Order failed: {response['retMsg']}")
+                return None
+        except Exception as e:
+            print_error(f"Order error: {e}")
+            return None
+    
+    def close_position(self, position):
+        """Close an existing position"""
+        try:
+            # Opposite side to close
+            close_side = "Sell" if position['side'] == "Buy" else "Buy"
+            
+            print_info(f"Closing {position['side']} position...")
+            
+            response = self.session.place_order(
+                category="linear",
+                symbol=self.symbol,
+                side=close_side,
+                orderType="Market",
+                qty=str(position['size']),
+                reduceOnly=True
+            )
+            
+            if response['retCode'] == 0:
+                print_success(f"Position closed! PnL: ${position['pnl']:.2f}")
+                return True
+            else:
+                print_error(f"Close failed: {response['retMsg']}")
+                return False
+        except Exception as e:
+            print_error(f"Close error: {e}")
             return False
-            
-        current_price = df['close'].iloc[-1]
-        print(f"✅ Current {symbol} price: ${current_price:.4f}")
-        
-        # Test 1: Open LONG position
-        print("\n" + "="*60)
-        print("TEST 1: Opening LONG position")
-        print("="*60)
-        
-        # Create a BUY signal
-        buy_signal = {
-            'action': 'BUY',
-            'price': current_price,
-            'rsi': 25.0,  # Oversold
-            'mfi': 30.0,  # Oversold
-            'timestamp': datetime.now(),
-            'confidence': 'TEST',
-            'reason': 'Test LONG entry'
-        }
-        
-        # Execute the trade
-        await engine.execute_trade(buy_signal, symbol)
-        
-        # Check position
-        if symbol in engine.positions:
-            position = engine.positions[symbol]
-            print(f"✅ LONG position opened at ${position['entry_price']:.4f}")
-            print(f"   Entry time: {position['entry_time']}")
-            print(f"   Size: {position['size']}")
-        else:
-            print("❌ Failed to open LONG position")
-            return False
-        
-        # Wait a moment
-        await asyncio.sleep(2)
-        
-        # Test 2: Close LONG position
-        print("\n" + "="*60)
-        print("TEST 2: Closing LONG position")
-        print("="*60)
-        
-        # Simulate price increase (5% profit)
-        exit_price = current_price * 1.05
-        
-        # Create SELL signal to close
-        sell_signal = {
-            'action': 'SELL',
-            'price': exit_price,
-            'rsi': 70.0,  # Overbought
-            'mfi': 75.0,  # Overbought
-            'timestamp': datetime.now(),
-            'confidence': 'TEST',
-            'reason': 'Test LONG exit'
-        }
-        
-        # Execute the trade
-        await engine.execute_trade(sell_signal, symbol)
-        
-        # Check position closed
-        if symbol not in engine.positions:
-            print(f"✅ LONG position closed at ${exit_price:.4f}")
-            print(f"   P&L: +5.00% (simulated)")
-        else:
-            print("❌ Failed to close LONG position")
-            return False
-            
-        # Wait a moment
-        await asyncio.sleep(2)
-        
-        # Test 3: Open SHORT position
-        print("\n" + "="*60)
-        print("TEST 3: Opening SHORT position")
-        print("="*60)
-        
-        # For spot trading, we can't actually short
-        # But we'll simulate it by tracking a "short" position
-        print("⚠️  Note: Spot trading doesn't support real SHORT positions")
-        print("   This is a simulated SHORT for testing purposes")
-        
-        # Create a SHORT signal (in real trading, this would be different)
-        short_signal = {
-            'action': 'SHORT',
-            'price': exit_price,
-            'rsi': 75.0,  # Overbought
-            'mfi': 80.0,  # Overbought
-            'timestamp': datetime.now(),
-            'confidence': 'TEST',
-            'reason': 'Test SHORT entry'
-        }
-        
-        # Manually track SHORT position (since spot doesn't support it)
-        engine.positions[symbol] = {
-            'entry_price': short_signal['price'],
-            'entry_time': datetime.now(),
-            'side': 'short',
-            'size': 0.1
-        }
-        
-        print(f"✅ SHORT position opened at ${short_signal['price']:.4f}")
-        
-        # Wait a moment
-        await asyncio.sleep(2)
-        
-        # Test 4: Close SHORT position
-        print("\n" + "="*60)
-        print("TEST 4: Closing SHORT position")
-        print("="*60)
-        
-        # Simulate price decrease (3% profit on short)
-        cover_price = exit_price * 0.97
-        
-        # Calculate P&L for short
-        short_pnl = ((engine.positions[symbol]['entry_price'] - cover_price) / engine.positions[symbol]['entry_price']) * 100
-        
-        print(f"✅ SHORT position closed at ${cover_price:.4f}")
-        print(f"   P&L: +{short_pnl:.2f}% (price went down, short profited)")
-        
-        # Clear position
-        del engine.positions[symbol]
-        
-        # Summary
-        print("\n" + "="*60)
-        print("📊 TRADING CYCLE TEST SUMMARY")
-        print("="*60)
-        print("✅ LONG Entry: SUCCESS")
-        print("✅ LONG Exit: SUCCESS (+5.00%)")
-        print("✅ SHORT Entry: SUCCESS (simulated)")
-        print("✅ SHORT Exit: SUCCESS (+3.00%)")
-        print("\n✅ All trading cycle tests passed!")
-        
-        # Show final stats
-        if hasattr(engine, 'trade_count'):
-            print(f"\nTotal trades executed: {engine.trade_count}")
-            print(f"Wins: {engine.win_count}")
-            print(f"Losses: {engine.loss_count}")
-            
-        return True
-        
-    except Exception as e:
-        print(f"\n❌ Test failed with error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
 
-async def test_with_real_signals():
-    """Test with real market conditions to generate actual signals"""
-    
-    print("\n\n🎯 TESTING WITH REAL MARKET CONDITIONS")
+async def run_test():
+    """Run the streamlined test"""
     print("=" * 60)
-    print("This will monitor real market data and execute trades")
-    print("when actual RSI/MFI signals are generated")
+    print("🚀 STREAMLINED TESTNET TRADING TEST")
     print("=" * 60)
-    
-    try:
-        engine = TradeEngine()
-        
-        print("\n⏳ Monitoring for real signals (this may take a few minutes)...")
-        print("Press Ctrl+C to stop monitoring")
-        
-        # Monitor for up to 5 minutes
-        start_time = datetime.now()
-        timeout = 300  # 5 minutes
-        
-        while (datetime.now() - start_time).total_seconds() < timeout:
-            # Process each symbol
-            for symbol in engine.symbols:
-                # Get market data
-                df = await engine.fetch_ohlcv(symbol, timeframe='1', limit=100)
-                if df is None or len(df) < 50:
-                    continue
-                
-                # Calculate indicators
-                df_with_indicators = engine.strategy.calculate_indicators(df.copy())
-                
-                # Get current values
-                current_price = df['close'].iloc[-1]
-                current_rsi = df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators else 50
-                current_mfi = df_with_indicators['mfi'].iloc[-1] if 'mfi' in df_with_indicators else 50
-                
-                # Display current status
-                print(f"\r[{datetime.now().strftime('%H:%M:%S')}] {symbol}: "
-                      f"${current_price:.4f} | RSI: {current_rsi:.1f} | MFI: {current_mfi:.1f}", end='')
-                
-                # Check for signals
-                signal = engine.strategy.generate_signal(df)
-                
-                if signal:
-                    print()  # New line
-                    await engine.execute_trade(signal, symbol)
-                    
-            # Wait before next check
-            await asyncio.sleep(10)
-            
-        print("\n\n⏰ Monitoring timeout reached")
-        
-    except KeyboardInterrupt:
-        print("\n\n⚠️  Monitoring stopped by user")
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-
-async def main():
-    """Run all trading cycle tests"""
-    
-    print("🚀 RSI+MFI BOT TRADING CYCLE TEST")
-    print("=" * 60)
-    print("This test will verify the bot can:")
-    print("• Open and close LONG positions")
-    print("• Open and close SHORT positions")
-    print("• Track P&L correctly")
-    print("• Handle position management")
+    print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     
-    # Run the trading cycle test
-    success = await test_trading_cycle()
+    trader = TestnetTrader()
     
-    if success:
-        # Ask if user wants to test with real signals
-        print("\n" + "="*60)
-        response = input("\nWould you like to monitor for real market signals? (y/N): ")
-        
-        if response.lower() == 'y':
-            await test_with_real_signals()
+    # Step 1: Connect
+    print("STEP 1: Connecting to Bybit Testnet...")
+    if not trader.connect():
+        return
     
-    print("\n✅ Trading cycle test complete!")
+    # Step 2: Check balance
+    print("\nSTEP 2: Checking balance...")
+    balance = trader.check_balance()
+    if balance < 10:
+        print_error("Insufficient balance! Need at least $10 USDT")
+        print_info("Get testnet funds from: https://testnet.bybit.com/faucet")
+        return
+    
+    # Step 3: Get market price
+    print("\nSTEP 3: Getting market data...")
+    price = trader.get_current_price()
+    if not price:
+        return
+    
+    # Step 4: Check for existing position
+    print("\nSTEP 4: Checking positions...")
+    position = trader.check_position()
+    
+    # Step 5: Execute test trades
+    print("\nSTEP 5: Executing test trades...")
+    
+    # Calculate small test position (0.5% of balance)
+    position_value = balance * 0.005
+    contracts = round(position_value / price, 3)
+    
+    print_info(f"Test position size: {contracts} contracts (${position_value:.2f})")
+    
+    if position:
+        # Close existing position first
+        print_warning("Closing existing position first...")
+        if trader.close_position(position):
+            await asyncio.sleep(2)
+        else:
+            return
+    
+    # Test 1: Open LONG
+    print("\n📈 TEST 1: Opening LONG position...")
+    order_id = trader.place_order("Buy", contracts)
+    if not order_id:
+        return
+    
+    await asyncio.sleep(3)
+    
+    # Check position
+    position = trader.check_position()
+    if not position:
+        print_error("Failed to open position")
+        return
+    
+    # Test 2: Close LONG
+    print("\n📉 TEST 2: Closing LONG position...")
+    if trader.close_position(position):
+        await asyncio.sleep(3)
+    
+    # Test 3: Open SHORT
+    print("\n📉 TEST 3: Opening SHORT position...")
+    order_id = trader.place_order("Sell", contracts)
+    if not order_id:
+        return
+    
+    await asyncio.sleep(3)
+    
+    # Check position
+    position = trader.check_position()
+    if not position:
+        print_error("Failed to open SHORT position")
+        return
+    
+    # Test 4: Close SHORT
+    print("\n📈 TEST 4: Closing SHORT position...")
+    if trader.close_position(position):
+        await asyncio.sleep(3)
+    
+    # Final balance check
+    print("\nFINAL: Checking final balance...")
+    final_balance = trader.check_balance()
+    pnl = final_balance - balance
+    
+    print("\n" + "=" * 60)
+    print("📊 TEST SUMMARY")
+    print("=" * 60)
+    print_success("All tests completed!")
+    print(f"Initial Balance: ${balance:.2f}")
+    print(f"Final Balance: ${final_balance:.2f}")
+    print(f"Net P&L: ${pnl:+.2f}")
+    print("=" * 60)
+
+def main():
+    """Main entry point"""
+    print("Bybit Testnet Trading Test")
+    print("This will execute real trades on testnet!")
+    print()
+    
+    response = input("Continue with test? (y/N): ")
+    if response.lower() != 'y':
+        print("Test cancelled.")
+        return
+    
+    try:
+        asyncio.run(run_test())
+    except KeyboardInterrupt:
+        print("\n\nTest interrupted by user")
+    except Exception as e:
+        print_error(f"Test failed: {e}")
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n⚠️  Test interrupted by user")
-    except Exception as e:
-        print(f"\n❌ Test error: {e}")
+    main()
