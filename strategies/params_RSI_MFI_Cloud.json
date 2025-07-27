@@ -1,8 +1,8 @@
 {
-  "rsi_length": 5,
-  "mfi_length": 5,
-  "oversold_level": 45,
-  "overbought_level": 55,
+  "rsi_length": 25,
+  "mfi_length": 17,
+  "oversold_level": 33,
+  "overbought_level": 71,
   "require_volume": false,
   "require_trend": false
 }
