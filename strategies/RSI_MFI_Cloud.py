@@ -14,10 +14,10 @@ class RSIMFICloudStrategy:
                 with open(params_file, 'r') as f:
                     self.params = json.load(f)
             except:
-                # Default production params
+                # Default testnet params
                 self.params = {
-                    "rsi_length": 14,
-                    "mfi_length": 14, 
+                    "rsi_length": 7,
+                    "mfi_length": 7, 
                     "oversold_level": 35,
                     "overbought_level": 65,
                     "require_volume": False,
@@ -27,7 +27,7 @@ class RSIMFICloudStrategy:
         self.last_signal = None
         self.signal_cooldown = 0
         
-    def calculate_rsi(self, prices, period=14):
+    def calculate_rsi(self, prices, period=7):
         """Calculate RSI with robust error handling"""
         try:
             if len(prices) < period + 1:
@@ -58,7 +58,7 @@ class RSIMFICloudStrategy:
             print(f"RSI calculation error: {e}")
             return pd.Series([50] * len(prices), index=prices.index)
     
-    def calculate_mfi(self, high, low, close, volume, period=14):
+    def calculate_mfi(self, high, low, close, volume, period=7):
         """Calculate MFI with enhanced volume handling"""
         try:
             if len(close) < period + 1:
@@ -72,7 +72,6 @@ class RSIMFICloudStrategy:
             
             # Handle zero or missing volume
             if volume.sum() == 0 or volume.isna().all():
-                print("⚠️  Zero volume detected - using price-based volume estimation")
                 # Estimate volume based on price volatility
                 price_range = high - low
                 avg_price = (high + low + close) / 3
@@ -136,7 +135,7 @@ class RSIMFICloudStrategy:
         return df
     
     def generate_signal(self, df):
-        """Generate production trading signals"""
+        """Generate trading signals for TESTNET"""
         min_bars = max(self.params['rsi_length'], self.params['mfi_length']) + 5
         if len(df) < min_bars:
             return None
@@ -155,63 +154,52 @@ class RSIMFICloudStrategy:
             pd.isna(prev_rsi) or pd.isna(current_price)):
             return None
         
-        # Decrease cooldown
+        # Signal cooldown for real trading
         if self.signal_cooldown > 0:
             self.signal_cooldown -= 1
             return None
         
-        # Production signal conditions
-        oversold = self.params['oversold_level']
-        overbought = self.params['overbought_level']
+        # Trading signal conditions
+        oversold = self.params['oversold_level']    # 35
+        overbought = self.params['overbought_level'] # 65
         
-        # More conservative signals for live trading
-        
-        # Strong BUY: RSI oversold, MFI confirms, and momentum turning up
+        # BUY: Both oversold
         buy_conditions = [
-            current_rsi < oversold,  # RSI oversold
-            current_mfi < 40,        # MFI also low
-            current_rsi > prev_rsi,  # RSI turning up
+            current_rsi < oversold,
+            current_mfi < oversold,
             self.last_signal != 'BUY'
         ]
         
-        # Strong SELL: RSI overbought, MFI confirms, and momentum turning down  
+        # SELL: Both overbought
         sell_conditions = [
-            current_rsi > overbought,  # RSI overbought
-            current_mfi > 60,          # MFI also high
-            current_rsi < prev_rsi,    # RSI turning down
+            current_rsi > overbought,
+            current_mfi > overbought,
             self.last_signal != 'SELL'
         ]
-        
-        # Additional volume confirmation (if available)
-        if len(df) >= 20:
-            volume_ratio = df['volume_ratio'].iloc[-1]
-            if not pd.isna(volume_ratio):
-                buy_conditions.append(volume_ratio > 1.2)  # Above average volume
-                sell_conditions.append(volume_ratio > 1.2)
         
         # Generate signals
         if all(buy_conditions):
             self.last_signal = 'BUY'
-            self.signal_cooldown = 10  # Longer cooldown for live trading
+            self.signal_cooldown = 5  # 5 cycles cooldown for real trading
             return {
                 'action': 'BUY',
                 'price': current_price,
                 'rsi': round(current_rsi, 2),
                 'mfi': round(current_mfi, 2),
                 'timestamp': df.index[-1],
-                'confidence': 'HIGH'
+                'confidence': 'TESTNET'
             }
             
         elif all(sell_conditions):
             self.last_signal = 'SELL'
-            self.signal_cooldown = 10  # Longer cooldown for live trading
+            self.signal_cooldown = 5  # 5 cycles cooldown for real trading
             return {
                 'action': 'SELL',
                 'price': current_price,
                 'rsi': round(current_rsi, 2),
                 'mfi': round(current_mfi, 2),
                 'timestamp': df.index[-1],
-                'confidence': 'HIGH'
+                'confidence': 'TESTNET'
             }
         
         return None

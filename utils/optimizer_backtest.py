@@ -15,8 +15,8 @@ class BayesianBacktestOptimizer:
         self.symbol = symbol
         self.timeframe = timeframe
         self.initial_balance = initial_balance
-        self.commission = 0.001  # 0.1%
-        self.slippage = 0.0005   # 0.05%
+        self.commission = 0.0005  # 0.05% (reduced from 0.1%)
+        self.slippage = 0.0002    # 0.02% (reduced from 0.05%)
         self.debug_mode = True   # Show debug info on first run
         
         # Load and prepare data
@@ -126,9 +126,9 @@ class BayesianBacktestOptimizer:
             print(f"MFI range: {mfi.min():.2f} to {mfi.max():.2f}")
             print(f"Oversold level: {oversold}, Overbought level: {overbought}")
         
-        # Generate signals
-        buy_signal = (rsi < oversold) & (mfi < oversold)
-        sell_signal = (rsi > overbought) | (mfi > overbought)
+        # Generate signals - use OR instead of AND for more trades
+        buy_signal = (rsi < oversold) | (mfi < oversold)  # Either indicator oversold
+        sell_signal = (rsi > overbought) | (mfi > overbought)  # Either indicator overbought
         
         # Debug: Check signals (only on first run)
         if self.debug_mode:
@@ -202,8 +202,10 @@ class BayesianBacktestOptimizer:
             periods_per_year = 35040   # 365 * 24 * 4
         elif self.timeframe.startswith('30_'):  # 30-minute data
             periods_per_year = 17520   # 365 * 24 * 2
-        else:  # Default to hourly
+        elif 'h' in self.timeframe:  # Hourly data
             periods_per_year = 8760    # 365 * 24
+        else:  # Default to 5-minute
+            periods_per_year = 105120
             
         if returns.std() > 0:
             sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(periods_per_year)
@@ -383,7 +385,7 @@ if __name__ == "__main__":
     optimizer = BayesianBacktestOptimizer(
         h5_path="data/crypto_database.h5",
         symbol="SOLUSDT",
-        timeframe="1_90d"  # 1-minute data, 90 days
+        timeframe="1_90d"  # 5-minute data is less noisy than 1-minute
     )
     
     # Run optimization

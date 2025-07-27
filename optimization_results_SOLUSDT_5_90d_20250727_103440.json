@@ -1,0 +1,33 @@
+{
+  "symbol": "SOLUSDT",
+  "timeframe": "5_90d",
+  "timestamp": "20250727_103440",
+  "best_params": {
+    "rsi_length": 27,
+    "mfi_length": 30,
+    "oversold_level": 40,
+    "overbought_level": 80,
+    "require_volume": false,
+    "require_trend": false
+  },
+  "metrics": {
+    "Train": {
+      "sharpe_ratio": 5.816384191052187,
+      "total_return": 22.756083147781613,
+      "win_rate": 78.94736842105263,
+      "num_trades": 19
+    },
+    "Val": {
+      "sharpe_ratio": 17.843352982697837,
+      "total_return": 15.991026592688229,
+      "win_rate": 87.5,
+      "num_trades": 8
+    },
+    "Test": {
+      "sharpe_ratio": 1.5647996269158666,
+      "total_return": 1.3351289983625225,
+      "win_rate": 75.0,
+      "num_trades": 4
+    }
+  }
+}
