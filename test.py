@@ -147,12 +147,21 @@ async def test_exchange_connection():
             balance = auth_session.get_wallet_balance(accountType="UNIFIED")
             if balance['retCode'] == 0:
                 test_pass("Bybit authenticated API connection")
+                # Show balance
+                for coin in balance['result']['list'][0]['coin']:
+                    if coin['coin'] == 'USDT':
+                        usdt_balance = float(coin['walletBalance'])
+                        print(f"   💰 USDT Balance: ${usdt_balance:.2f}")
+                        break
             elif balance['retCode'] == 401:
-                test_warn("Bybit authenticated API", "401 Unauthorized - Check API keys are valid/not expired")
+                # This is expected if keys are expired - not a critical error
+                test_warn("Bybit authenticated API", "Keys expired/invalid (bot works in demo mode)")
+                print("   💡 Run 'python fix_api_keys.py' to update keys")
+                print("   ✅ Bot still works with public data in demo mode")
             else:
                 test_fail("Bybit authenticated API", balance.get('retMsg', 'Unknown error'))
         else:
-            test_warn("Bybit authenticated API", "No API keys configured")
+            test_warn("Bybit authenticated API", "No API keys configured (demo mode only)")
             
     except Exception as e:
         test_fail("Exchange connection", str(e))
