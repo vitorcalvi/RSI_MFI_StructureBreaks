@@ -1,6 +1,6 @@
 class RiskManager:
     def __init__(self):
-        self.max_position_size = 0.05  # 5% of balance (reduced from 10%)
+        self.max_position_size = 0.1  # 5% of balance (reduced from 10%)
         self.stop_loss_pct = 0.02      # 2% stop loss
         self.take_profit_pct = 0.04    # 4% take profit
         

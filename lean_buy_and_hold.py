@@ -3,7 +3,7 @@
 Unified Trading Tool for Jesse Bot
 Usage:
     # Basic market orders
-    python trade_bybit.py buy ETH/USDT                      # Market buy with defaults (0.4% SL, ATR trailing)
+    python trade_bybit.py buy ETH/USDT                      # Market buy with defaults (ATR SL, ATR trailing)
     python trade_bybit.py sell BTC/USDT                     # Market sell with defaults
     
     # Limit orders
@@ -15,7 +15,7 @@ Usage:
     python trade_bybit.py buy SOL/USDT --sl 1.0            # 1% stop loss (no default TP)
     
     # Custom risk/reward ratio (enables TP)
-    python trade_bybit.py buy ETH/USDT --rr 5              # 1:5 risk/reward (0.4% SL, 2% TP)
+    python trade_bybit.py buy ETH/USDT --rr 5              # 1:5 risk/reward (ATR SL, ATR*5 TP)
     python trade_bybit.py sell BTC/USDT --stop 0.3 --rr 4  # 0.3% SL with 1:4 RR = 1.2% TP
     
     # Custom take profit (enables TP)
@@ -23,7 +23,7 @@ Usage:
     python trade_bybit.py buy ETH/USDT --sl 0.5 --tp 3     # 0.5% SL, 3% TP = 1:6 RR
     
     # Trailing stop
-    python trade_bybit.py buy BTC/USDT --trail 0.2         # 0.2% trailing (default ATR-based)
+    python trade_bybit.py buy BTC/USDT --trail 0.2         # 0.2% trailing (override ATR)
     python trade_bybit.py sell ETH/USDT --trail 0.5        # 0.5% trailing stop
     
     # Combined parameters
@@ -37,6 +37,7 @@ Usage:
 """
 
 
+
 import argparse
 import sys
 import os
@@ -48,8 +49,10 @@ from dotenv import load_dotenv
 import csv
 
 
+
 # Load environment variables
 load_dotenv()
+
 
 
 # Color support
@@ -59,6 +62,7 @@ try:
     G, R, Y, B, BOLD, RST = Fore.GREEN, Fore.RED, Fore.YELLOW, Fore.CYAN, Style.BRIGHT, Style.RESET_ALL
 except ImportError:
     G = R = Y = B = BOLD = RST = ""
+
 
 
 
@@ -75,8 +79,7 @@ class Config:
         API_SECRET = os.getenv('LIVE_BYBIT_API_SECRET')
     
     # Defaults
-    STOP_LOSS = float(os.getenv('STOP_LOSS_PCT', '0.04')) 
-    RISK_RATIO = float(os.getenv('RISK_RATIO', '2.0'))  # Only used if --rr or --tp specified
+    RISK_RATIO = float(os.getenv('RISK_RATIO', '5'))  # Only used if --rr or --tp specified
     
     # Data files
     DATA_DIR = Path(os.getenv('DATA_DIR', 'data'))
@@ -100,9 +103,11 @@ class Config:
 
 
 
+
 def get_exchange():
     """Initialize exchange connection"""
     return HTTP(demo=Config.DEMO_MODE, api_key=Config.API_KEY, api_secret=Config.API_SECRET)
+
 
 
 
@@ -117,6 +122,7 @@ def get_balance(exchange):
 
 
 
+
 def get_symbol_info(exchange, symbol):
     """Get symbol trading rules"""
     resp = exchange.get_instruments_info(category="linear", symbol=symbol.replace('/', ''))
@@ -128,6 +134,7 @@ def get_symbol_info(exchange, symbol):
             'tick_size': float(info['priceFilter']['tickSize'])
         }
     return None
+
 
 
 
@@ -169,6 +176,7 @@ def calculate_atr(exchange, symbol, period=14, interval="15"):
 
 
 
+
 def format_qty(info, raw_qty):
     """Format quantity according to exchange requirements"""
     step = info['qty_step']
@@ -178,6 +186,7 @@ def format_qty(info, raw_qty):
     step_str = f"{step:g}"
     decimals = len(step_str.split('.')[1]) if '.' in step_str else 0
     return f"{qty:.{decimals}f}" if decimals else str(int(qty))
+
 
 
 
@@ -205,6 +214,7 @@ def format_price(info, price):
 
 
 
+
 def get_position_size_pct(symbol, atr_pct):
     """Calculate position size based on asset category and volatility"""
     base_asset = symbol.split('/')[0].upper()
@@ -229,6 +239,7 @@ def get_position_size_pct(symbol, atr_pct):
     
     final_size = base_size * size_multiplier
     return min(final_size, 0.05)
+
 
 
 
@@ -274,17 +285,18 @@ def set_trading_stops(exchange, symbol, linear, info, sl_price=None, tp_price=No
             "trailingStop": trail_amount_formatted
         }
         
-        print(f"{Y}📤 Setting trailing stop: {trail_pct:.1f}% = ${trail_amount_formatted}{RST}")
+        print(f"{Y}📤 Setting trailing stop: {trail_pct:.2f}% = ${trail_amount_formatted}{RST}")
         
         trail_result = exchange.set_trading_stop(**trail_params)
         
         if trail_result.get('retCode') == 0:
-            print(f"{G}✅ Trailing stop set: {trail_pct:.1f}%{RST}")
+            print(f"{G}✅ Trailing stop set: {trail_pct:.2f}%{RST}")
         else:
             print(f"{R}❌ Failed to set trailing stop: {trail_result.get('retMsg')}{RST}")
             print(f"{Y}💡 Manual trailing available - use Bybit interface{RST}")
     
     return True
+
 
 
 
@@ -443,6 +455,7 @@ def wait_for_limit_fill(exchange, linear, order_id, limit_price, side, timeout=3
 
 
 
+
 def log_trade_to_csv(trade_data):
     """Log trade details to CSV file"""
     with open(Config.TRADES_FILE, 'a', newline='') as f:
@@ -472,7 +485,8 @@ def log_trade_to_csv(trade_data):
 
 
 
-def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pct=None, order_type="Market", limit_price=None):
+
+def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pct=None, order_type="Market", limit_price=None, atr_multi=1.0):
     """Execute trade with specified parameters"""
     
     Config.init()
@@ -497,13 +511,13 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
     
     atr = calculate_atr(exchange, symbol)
     if atr and atr > 0:
-        atr_pct = atr / current
+        atr_pct = (atr / current) * atr_multi
         default_trail_pct = atr_pct * 100
     else:
         atr = 0
-        atr_pct = 0.025
+        atr_pct = 0.025 * atr_multi
         default_trail_pct = atr_pct * 100
-    print(f"{B}📊 ATR: ${atr:.6f} ({atr_pct*100:.2f}% of price){RST}")
+    print(f"{B}📊 ATR: ${atr:.6f} ({atr_pct*100:.2f}% of price, multi={atr_multi:.1f}x){RST}")
     
     position_size_pct = get_position_size_pct(symbol, atr_pct)
     balance = get_balance(exchange)
@@ -520,9 +534,9 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
     else:
         asset_category = "Small Cap"
     
-    print(f"{Y}📊 Position Sizing: {asset_category} ({base_asset}) × {atr_pct*100:.1f}% volatility = {position_size_pct*100:.1f}% size{RST}")
+    print(f"{Y}📊 Position Sizing: {asset_category} ({base_asset}) × {atr_pct*100:.2f}% volatility = {position_size_pct*100:.2f}% size{RST}")
     
-    stop_pct = stop_pct or Config.STOP_LOSS
+    stop_pct = stop_pct or atr_pct
     trail_pct = trail_pct or default_trail_pct
     
     # Only calculate TP if explicitly requested via --tp or --rr
@@ -593,10 +607,12 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
     print(f"{'━' * 60}\n")
     
     print(f"{BOLD}💵 RISK FIRST:{RST}")
-    print(f"   {R}• MAX LOSS: ${net_loss:,.2f} ({(net_loss/balance)*100:.2f}% of balance) ← YOUR ONLY CONCERN{RST}")
+    print(f"   {R}• MAX LOSS: ${net_loss:,.2f} ({(net_loss/balance)*100:.3f}% of balance) ← YOUR ONLY CONCERN{RST}")
+    print(f"   • Fees on Loss: ${fees_on_loss:,.2f} (entry: ${entry_fee:,.2f}, exit at SL: ${exit_fee_at_sl:,.2f})")
     
     if use_tp:
         print(f"   • Profit Target: ${net_profit:,.2f} (bonus if hit)")
+        print(f"   • Fees on Win: ${fees_on_win:,.2f} (entry: ${entry_fee:,.2f}, exit at TP: ${exit_fee_at_tp:,.2f})")
     
     be_distance = abs(be_trigger - entry)
     be_profit_gross = be_distance * float(qty)
@@ -611,19 +627,19 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
     
     print(f"\n{BOLD}💰 Position:{RST}")
     print(f"   Balance: ${balance:,.2f}")
-    print(f"   Size: {position_size_pct*100:.1f}% = ${size_usdt:,.2f} ({qty} {symbol.split('/')[0]})")
+    print(f"   Size: {position_size_pct*100:.2f}% = ${size_usdt:,.2f} ({qty} {symbol.split('/')[0]})")
     
     print(f"\n{BOLD}📊 Levels:{RST}")
     print(f"   Entry: ${format_price(info, entry)}")
-    print(f"   Stop Loss: ${format_price(info, sl)} ({sl_sign}{stop_pct*100:.1f}%)")
+    print(f"   Stop Loss: ${format_price(info, sl)} ({sl_sign}{stop_pct*100:.2f}%)")
     if use_tp:
-        print(f"   Take Profit: ${format_price(info, tp)} ({tp_sign}{tp_pct*100:.1f}%)")
-    print(f"   Break-Even Trigger: ${format_price(info, be_trigger)} ({be_sign}{stop_pct*100:.1f}%)")
+        print(f"   Take Profit: ${format_price(info, tp)} ({tp_sign}{tp_pct*100:.2f}%)")
+    print(f"   Break-Even Trigger: ${format_price(info, be_trigger)} ({be_sign}{stop_pct*100:.2f}%)")
     print(f"   Trailing: {trail_pct:.2f}% (Bybit native)")
     
     print(f"\n{Y}⚠️  RISK CHECK:{RST}")
     print(f"   • Can you afford to lose ${net_loss:,.2f}? YES → Proceed")
-    print(f"   • Is {(net_loss/balance)*100:.2f}% risk per trade your plan? YES → Proceed")
+    print(f"   • Is {(net_loss/balance)*100:.3f}% risk per trade your plan? YES → Proceed")
     if use_tp:
         win_rate_needed = 100 / (1 + net_rr)
         print(f"   • Win Rate needed for profit: >{win_rate_needed:.0f}% (with 1:{net_rr:.2f} RR)")
@@ -660,7 +676,7 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
         rr_1_3_net = rr_1_3_gross / (actual_stop + fee_rate * 2)
         wr_1_3 = 100 / (1 + rr_1_3_net)
         
-        print(f"   │ 1:1 ({actual_stop*100:.1f}%)  │ {wr_1_1:.0f}% 😰              │")
+        print(f"   │ 1:1 ({actual_stop*100:.2f}%) │ {wr_1_1:.0f}% 😰              │")
         print(f"   │ 1:1.5       │ {wr_1_15:.0f}% 😐              │")
         print(f"   │ 1:2         │ {wr_1_2:.0f}% ✅              │")
         print(f"   │ 1:3         │ {wr_1_3:.0f}% 🎯              │")
@@ -737,8 +753,8 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
         print(f"{G}{'━' * 60}{RST}")
         print(f"📊 {side} {qty} {symbol} @ ${format_price(info, actual_entry)}")
         if use_tp:
-            print(f"🎯 Target: {tp_sign}{tp_pct*100:.1f}% @ ${format_price(info, tp)} ({G}+${net_profit:,.2f} net{RST})")
-        print(f"🛑 Stop: {sl_sign}{stop_pct*100:.1f}% @ ${format_price(info, sl)} ({R}-${net_loss:,.2f} net{RST})")
+            print(f"🎯 Target: {tp_sign}{tp_pct*100:.2f}% @ ${format_price(info, tp)} ({G}+${net_profit:,.2f} net{RST})")
+        print(f"🛑 Stop: {sl_sign}{stop_pct*100:.2f}% @ ${format_price(info, sl)} ({R}-${net_loss:,.2f} net{RST})")
         print(f"📈 Trailing: {trail_pct:.2f}% (Bybit native)")
         print(f"{G}{'━' * 60}{RST}")
         
@@ -771,6 +787,7 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
 
 
 
+
 def main():
     parser = argparse.ArgumentParser(
         description='🚀 Unified Trading Tool',
@@ -795,6 +812,7 @@ def main():
     parser.add_argument('--tp', type=float, metavar='%', help='Take profit % (enables TP)')
     parser.add_argument('--rr', type=float, metavar='RATIO', help='Risk/Reward ratio (enables TP)')
     parser.add_argument('--trail', type=float, metavar='%', help='Trailing stop %')
+    parser.add_argument('--atr-multi', type=float, default=1.0, metavar='MULTI', help='ATR multiplier for SL/Trailing (default: 1.0)')
     
     parser.add_argument('--real', action='store_true', help='Real money trading')
     
@@ -829,10 +847,13 @@ def main():
         tp_pct=args.tp/100 if args.tp else None,
         trail_pct=args.trail,
         order_type=order_type,
-        limit_price=limit_price
+        limit_price=limit_price,
+        atr_multi=args.atr_multi
     )
+
 
 
 
 if __name__ == "__main__":
     main()
+

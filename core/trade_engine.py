@@ -45,7 +45,7 @@ class TradeEngine:
         """Initialize exchange connection"""
         try:
             self.exchange = HTTP(
-                testnet=self.demo_mode,
+                demo=self.demo_mode,
                 api_key=self.api_key,
                 api_secret=self.api_secret
             )
