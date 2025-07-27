@@ -312,7 +312,7 @@ if __name__ == "__main__":
     # Initialize optimizer
     optimizer = BayesianBacktestOptimizer(
         h5_path="data/crypto_database.h5",
-        symbol="BTCUSDT",
+        symbol="SOLUSDT",
         timeframe="1h"
     )
     

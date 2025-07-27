@@ -29,33 +29,15 @@ class TradeEngine:
         """Initialize exchange connection"""
         if self.exchange_name == 'bybit':
             if self.demo_mode:
-                # Testnet for demo
-                api_key = os.getenv('TESTNET_BYBIT_API_KEY', '').strip()
-                api_secret = os.getenv('TESTNET_BYBIT_API_SECRET', '').strip()
-                
-                if api_key and api_secret:
-                    self.exchange = ccxt.bybit({
-                        'apiKey': api_key,
-                        'secret': api_secret,
-                        'enableRateLimit': True,
-                        'options': {
-                            'defaultType': 'spot',
-                            'adjustForTimeDifference': True
-                        }
-                    })
-                    self.exchange.set_sandbox_mode(True)
-                    print("✅ Connected to Bybit Testnet (Demo Mode)")
-                else:
-                    # Public mode for testnet
-                    self.exchange = ccxt.bybit({
-                        'enableRateLimit': True,
-                        'options': {
-                            'defaultType': 'spot',
-                            'adjustForTimeDifference': True
-                        }
-                    })
-                    self.exchange.set_sandbox_mode(True)
-                    print("✅ Connected to Bybit Testnet (Public Demo)")
+                # Demo mode - use public endpoints only
+                self.exchange = ccxt.bybit({
+                    'enableRateLimit': True,
+                    'options': {
+                        'defaultType': 'spot',
+                        'adjustForTimeDifference': True
+                    }
+                })
+                print("✅ Connected to Bybit (Demo Mode - Public Data Only)")
             else:
                 # Live trading
                 api_key = os.getenv('BYBIT_API_KEY', '').strip()
@@ -79,14 +61,16 @@ class TradeEngine:
                 self.exchange.load_markets()
                 print(f"✅ Markets loaded successfully")
                 
-                # Test balance if API keys provided
-                if not self.demo_mode or (os.getenv('TESTNET_BYBIT_API_KEY') and os.getenv('TESTNET_BYBIT_API_SECRET')):
+                # Test balance only if we have API keys
+                if not self.demo_mode:
                     try:
                         balance = self.exchange.fetch_balance()
                         usdt_balance = balance.get('USDT', {}).get('free', 0)
                         print(f"💰 USDT Balance: ${usdt_balance:.2f}")
                     except Exception as e:
                         print(f"⚠️  Balance check failed: {str(e)[:50]}")
+                else:
+                    print("💡 Demo mode - using public market data only")
                         
             except Exception as e:
                 print(f"⚠️  Exchange initialization error: {e}")
@@ -128,8 +112,8 @@ class TradeEngine:
     
     async def get_current_position(self, symbol):
         """Get current position for symbol"""
-        if self.demo_mode and not (os.getenv('TESTNET_BYBIT_API_KEY') and os.getenv('TESTNET_BYBIT_API_SECRET')):
-            # Demo mode without API keys
+        if self.demo_mode:
+            # Demo mode - return stored position
             return self.positions.get(symbol)
             
         try:
@@ -160,8 +144,8 @@ class TradeEngine:
             print(f"Time: {datetime.now().strftime('%H:%M:%S')}")
             
             # Handle demo mode
-            if self.demo_mode and not (os.getenv('TESTNET_BYBIT_API_KEY') and os.getenv('TESTNET_BYBIT_API_SECRET')):
-                print("[DEMO MODE] Signal logged only - Add API keys for testnet trading")
+            if self.demo_mode:
+                print("[DEMO MODE] Signal logged only")
                 
                 if signal['action'] == 'BUY' and symbol not in self.positions:
                     self.positions[symbol] = {
@@ -322,8 +306,8 @@ class TradeEngine:
         
         if not self.demo_mode:
             print("⚠️  LIVE TRADING MODE - REAL MONEY AT RISK")
-        elif self.demo_mode and not (os.getenv('TESTNET_BYBIT_API_KEY') and os.getenv('TESTNET_BYBIT_API_SECRET')):
-            print("💡 Add TESTNET_BYBIT_API_KEY/SECRET to .env for testnet trading")
+        else:
+            print("💡 Demo mode - signals logged only (no real trades)")
             
         print("Monitoring for signals...\n")
         

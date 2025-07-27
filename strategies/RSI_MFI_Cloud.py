@@ -17,9 +17,9 @@ class RSIMFICloudStrategy:
                 # Default production params
                 self.params = {
                     "rsi_length": 14,
-                    "mfi_length": 14,
-                    "oversold_level": 30,
-                    "overbought_level": 70,
+                    "mfi_length": 14, 
+                    "oversold_level": 35,
+                    "overbought_level": 65,
                     "require_volume": False,
                     "require_trend": False
                 }
