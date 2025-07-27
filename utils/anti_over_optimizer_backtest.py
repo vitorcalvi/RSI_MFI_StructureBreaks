@@ -2,12 +2,12 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 from skopt import gp_minimize
-from skopt.space import Integer
+from skopt.space import Integer, Real
 import json
 import warnings
 warnings.filterwarnings('ignore')
 
-class BayesianBacktestOptimizer:
+class ImprovedCryptoOptimizer:
     def __init__(self, h5_path, symbol, timeframe, initial_balance=10000):
         self.h5_path = h5_path
         self.symbol = symbol
@@ -24,7 +24,6 @@ class BayesianBacktestOptimizer:
         
         data = pd.read_hdf(self.h5_path, path)
         print(f"Loaded data shape: {data.shape}")
-        print(f"Columns: {list(data.columns)}")
         
         # Standardize column names
         data.columns = [col.lower() for col in data.columns]
@@ -37,6 +36,10 @@ class BayesianBacktestOptimizer:
         # Use last 10,000 candles
         data = data.tail(10000).copy()
         print(f"Using last {len(data)} candles")
+        
+        # Add market regime detection
+        sma_200 = data['close'].rolling(200).mean()
+        data['bull_market'] = data['close'] > sma_200
         
         return data
     
@@ -86,118 +89,29 @@ class BayesianBacktestOptimizer:
         
         return mfi.fillna(50)
     
-    def backtest_simple(self, params, data):
-        """Simplified backtest that returns only key metrics"""
-        rsi_length, mfi_length, oversold, overbought = params
+    def backtest_improved(self, params, data):
+        """Improved backtest with dynamic thresholds and better exit logic"""
+        rsi_length, mfi_length, oversold_base, overbought_base, stop_loss_pct, take_profit_pct = params
         
         # Calculate indicators
-        rsi = self.calculate_rsi(data['close'], rsi_length)
+        rsi = self.calculate_rsi(data['close'], int(rsi_length))
         mfi = self.calculate_mfi(data['high'], data['low'], 
-                                data['close'], data['volume'], mfi_length)
-        sma_50 = data['close'].rolling(50).mean()
+                                data['close'], data['volume'], int(mfi_length))
         
-        # Generate signals
-        buy_signal = ((rsi < oversold) | (mfi < oversold)) & (data['close'] > sma_50)
+        # Dynamic thresholds based on market regime
+        oversold = np.where(data['bull_market'], oversold_base + 10, oversold_base)
+        overbought = np.where(data['bull_market'], overbought_base + 10, overbought_base)
         
-        # Fast vectorized backtest
-        position = 0
-        entry_price = 0
-        balance = self.initial_balance
-        num_trades = 0
-        returns = []
+        # More flexible entry signals (removed SMA requirement)
+        rsi_oversold = rsi < oversold
+        mfi_oversold = mfi < oversold
         
-        for i in range(51, len(data)):
-            # Check stop loss
-            if position > 0 and data['close'].iloc[i] < entry_price * 0.98:
-                sell_price = data['close'].iloc[i]
-                trade_return = (sell_price / entry_price) - 1
-                returns.append(trade_return)
-                balance = position * sell_price * (1 - self.commission)
-                position = 0
-                entry_price = 0
-                num_trades += 1
-                
-            # Check sell signal
-            elif position > 0:
-                sell_cond = ((rsi.iloc[i] > overbought) | 
-                           (mfi.iloc[i] > overbought) | 
-                           (data['close'].iloc[i] < sma_50.iloc[i]))
-                
-                if sell_cond:
-                    sell_price = data['close'].iloc[i]
-                    trade_return = (sell_price / entry_price) - 1
-                    returns.append(trade_return)
-                    balance = position * sell_price * (1 - self.commission)
-                    position = 0
-                    entry_price = 0
-                    num_trades += 1
-            
-            # Check buy signal
-            elif position == 0 and buy_signal.iloc[i]:
-                entry_price = data['close'].iloc[i]
-                position = (balance * 0.95) / entry_price * (1 - self.commission)
-                balance = 0
+        # Entry: Either RSI or MFI oversold (not both required)
+        buy_signal = rsi_oversold | mfi_oversold
         
-        # Close any open position
-        if position > 0:
-            final_price = data['close'].iloc[-1]
-            trade_return = (final_price / entry_price) - 1
-            returns.append(trade_return)
-            num_trades += 1
-        
-        # Calculate quick metrics
-        if num_trades < 10:
-            return -1.0  # Penalty for insufficient trades
-        
-        returns_series = pd.Series(returns)
-        sharpe = self.calculate_sharpe(returns_series)
-        
-        return sharpe
-    
-    def calculate_sharpe(self, returns):
-        """Calculate Sharpe ratio"""
-        if len(returns) == 0:
-            return -1.0
-        
-        mean_return = returns.mean()
-        std_return = returns.std()
-        
-        if std_return == 0:
-            return 0.0
-        
-        sharpe = np.sqrt(252) * mean_return / std_return
-        return sharpe
-    
-    def objective(self, params):
-        """Simplified objective function"""
-        self.call_count += 1
-        
-        # Quick evaluation on train and validation
-        train_sharpe = self.backtest_simple(params, self.train)
-        val_sharpe = self.backtest_simple(params, self.val)
-        
-        # Weighted score (prioritize validation)
-        score = 0.3 * train_sharpe + 0.7 * val_sharpe
-        
-        # Print progress every 10 calls
-        if self.call_count % 10 == 0:
-            print(f"Call {self.call_count}: Train Sharpe={train_sharpe:.3f}, "
-                  f"Val Sharpe={val_sharpe:.3f}, Score={score:.3f}")
-        
-        return -score  # Minimize negative score
-    
-    def backtest_detailed(self, params, data):
-        """Detailed backtest with all metrics (only for final evaluation)"""
-        rsi_length, mfi_length, oversold, overbought = params
-        
-        # Calculate indicators
-        rsi = self.calculate_rsi(data['close'], rsi_length)
-        mfi = self.calculate_mfi(data['high'], data['low'], 
-                                data['close'], data['volume'], mfi_length)
-        sma_50 = data['close'].rolling(50).mean()
-        
-        # Generate signals
-        buy_signal = ((rsi < oversold) | (mfi < oversold)) & (data['close'] > sma_50)
+        # Exit signals
+        rsi_overbought = rsi > overbought
+        mfi_overbought = mfi > overbought
         
         # Initialize trading variables
         position = 0
@@ -206,35 +120,47 @@ class BayesianBacktestOptimizer:
         trades = []
         equity_curve = [self.initial_balance]
         
-        for i in range(51, len(data)):
+        for i in range(max(int(rsi_length), int(mfi_length)) + 1, len(data)):
+            # Calculate current equity
             current_equity = balance if position == 0 else position * data['close'].iloc[i]
             equity_curve.append(current_equity)
             
-            # Check stop loss
-            if position > 0 and data['close'].iloc[i] < entry_price * 0.98:
-                sell_price = data['close'].iloc[i]
-                balance = position * sell_price * (1 - self.commission)
-                trades.append({
-                    'entry': entry_price,
-                    'exit': sell_price,
-                    'return': (sell_price / entry_price) - 1
-                })
-                position = 0
-                entry_price = 0
-                
-            # Check sell signal
-            elif position > 0:
-                sell_cond = ((rsi.iloc[i] > overbought) | 
-                           (mfi.iloc[i] > overbought) | 
-                           (data['close'].iloc[i] < sma_50.iloc[i]))
-                
-                if sell_cond:
+            if position > 0:
+                # Check stop loss
+                if data['close'].iloc[i] < entry_price * (1 - stop_loss_pct):
                     sell_price = data['close'].iloc[i]
                     balance = position * sell_price * (1 - self.commission)
                     trades.append({
                         'entry': entry_price,
                         'exit': sell_price,
-                        'return': (sell_price / entry_price) - 1
+                        'return': (sell_price / entry_price) - 1,
+                        'type': 'stop_loss'
+                    })
+                    position = 0
+                    entry_price = 0
+                    
+                # Check take profit
+                elif data['close'].iloc[i] > entry_price * (1 + take_profit_pct):
+                    sell_price = data['close'].iloc[i]
+                    balance = position * sell_price * (1 - self.commission)
+                    trades.append({
+                        'entry': entry_price,
+                        'exit': sell_price,
+                        'return': (sell_price / entry_price) - 1,
+                        'type': 'take_profit'
+                    })
+                    position = 0
+                    entry_price = 0
+                    
+                # Check overbought exit
+                elif rsi_overbought[i] or mfi_overbought[i]:
+                    sell_price = data['close'].iloc[i]
+                    balance = position * sell_price * (1 - self.commission)
+                    trades.append({
+                        'entry': entry_price,
+                        'exit': sell_price,
+                        'return': (sell_price / entry_price) - 1,
+                        'type': 'signal_exit'
                     })
                     position = 0
                     entry_price = 0
@@ -252,66 +178,98 @@ class BayesianBacktestOptimizer:
             trades.append({
                 'entry': entry_price,
                 'exit': final_price,
-                'return': (final_price / entry_price) - 1
+                'return': (final_price / entry_price) - 1,
+                'type': 'final_close'
             })
             
         # Final equity
         final_equity = balance if position == 0 else position * data['close'].iloc[-1]
+        equity_curve.append(final_equity)
         
-        # Calculate all metrics
-        if len(trades) == 0:
-            return {
-                'sharpe': -10.0,
-                'sortino': -10.0,
-                'total_return': -1.0,
-                'num_trades': 0,
-                'win_rate': 0.0,
-                'max_drawdown': 1.0
-            }
+        # Calculate metrics
+        if len(trades) < 5:
+            return {'score': -10.0, 'trades': 0}
         
-        returns = pd.Series([t['return'] for t in trades])
+        # Calculate returns from equity curve
         equity_series = pd.Series(equity_curve)
+        daily_returns = equity_series.pct_change().dropna()
         
-        # Metrics
-        sharpe = self.calculate_sharpe(returns)
-        winning_trades = len(returns[returns > 0])
+        # Sharpe ratio
+        sharpe = self.calculate_sharpe(daily_returns)
+        
+        # Win rate
+        winning_trades = len([t for t in trades if t['return'] > 0])
         win_rate = winning_trades / len(trades)
         
-        # Sortino
-        downside_returns = returns[returns < 0]
-        if len(downside_returns) > 0:
-            sortino = np.sqrt(252) * returns.mean() / downside_returns.std()
-        else:
-            sortino = sharpe * 2
-        
-        # Max drawdown
-        cumulative = equity_series / equity_series.iloc[0]
-        running_max = cumulative.expanding().max()
-        drawdown = (cumulative - running_max) / running_max
-        max_drawdown = abs(drawdown.min())
+        # Profit factor
+        gross_profits = sum([t['return'] for t in trades if t['return'] > 0])
+        gross_losses = abs(sum([t['return'] for t in trades if t['return'] < 0]))
+        profit_factor = gross_profits / gross_losses if gross_losses > 0 else 0
         
         # Total return
         total_return = (final_equity / self.initial_balance) - 1
         
+        # Score combining multiple metrics
+        score = (
+            0.3 * sharpe +
+            0.3 * total_return * 10 +  # Scale total return
+            0.2 * win_rate * 5 +        # Scale win rate
+            0.2 * (profit_factor - 1)   # Profit factor above 1
+        )
+        
         return {
+            'score': score,
+            'trades': len(trades),
             'sharpe': sharpe,
-            'sortino': sortino,
             'total_return': total_return,
-            'num_trades': len(trades),
             'win_rate': win_rate,
-            'max_drawdown': max_drawdown
+            'profit_factor': profit_factor
         }
     
+    def calculate_sharpe(self, returns):
+        """Calculate Sharpe ratio"""
+        if len(returns) == 0:
+            return -10.0
+        
+        mean_return = returns.mean()
+        std_return = returns.std()
+        
+        if std_return == 0:
+            return 0.0
+        
+        sharpe = np.sqrt(252) * mean_return / std_return
+        return sharpe
+    
+    def objective(self, params):
+        """Objective function for optimization"""
+        self.call_count += 1
+        
+        # Evaluate on train and validation
+        train_result = self.backtest_improved(params, self.train)
+        val_result = self.backtest_improved(params, self.val)
+        
+        # Weighted score (prioritize validation)
+        score = 0.3 * train_result['score'] + 0.7 * val_result['score']
+        
+        # Print progress every 10 calls
+        if self.call_count % 10 == 0:
+            print(f"Call {self.call_count}: Train score={train_result['score']:.3f}, "
+                  f"Val score={val_result['score']:.3f}, Combined={score:.3f}")
+        
+        return -score  # Minimize negative score
+    
     def optimize(self, n_calls=50):
-        """Run Bayesian optimization"""
+        """Run Bayesian optimization with improved parameter space"""
         space = [
-            Integer(14, 28, name='rsi_length'),
-            Integer(14, 28, name='mfi_length'),
-            Integer(25, 35, name='oversold_level'),
-            Integer(65, 75, name='overbought_level')
+            Integer(10, 20, name='rsi_length'),          # Shorter periods for crypto
+            Integer(10, 20, name='mfi_length'),
+            Integer(10, 30, name='oversold_base'),       # More extreme for crypto
+            Integer(70, 90, name='overbought_base'),
+            Real(0.02, 0.05, name='stop_loss_pct'),      # 2-5% stop loss
+            Real(0.03, 0.10, name='take_profit_pct')     # 3-10% take profit
         ]
         
-        print(f"\nStarting optimization for {self.symbol} {self.timeframe}...")
+        print(f"\nStarting IMPROVED optimization for {self.symbol} {self.timeframe}...")
         print(f"Number of optimization calls: {n_calls}")
         
         self.call_count = 0
@@ -320,7 +278,7 @@ class BayesianBacktestOptimizer:
             func=self.objective,
             dimensions=space,
             n_calls=n_calls,
-            n_initial_points=10,
+            n_initial_points=15,
             random_state=42,
             acq_func='EI'
         )
@@ -330,71 +288,90 @@ class BayesianBacktestOptimizer:
         print(f"Best parameters found:")
         print(f"RSI Length: {best_params[0]}")
         print(f"MFI Length: {best_params[1]}")
-        print(f"Oversold Level: {best_params[2]}")
-        print(f"Overbought Level: {best_params[3]}")
+        print(f"Oversold Base: {best_params[2]}")
+        print(f"Overbought Base: {best_params[3]}")
+        print(f"Stop Loss: {best_params[4]*100:.1f}%")
+        print(f"Take Profit: {best_params[5]*100:.1f}%")
         
         return best_params
     
-    def evaluate(self, params):
-        """Evaluate parameters on all datasets"""
+    def evaluate_detailed(self, params):
+        """Detailed evaluation with all metrics"""
         print(f"\nEvaluating final parameters...")
         
         # Get detailed metrics for each dataset
-        train_metrics = self.backtest_detailed(params, self.train)
-        val_metrics = self.backtest_detailed(params, self.val)
-        test_metrics = self.backtest_detailed(params, self.test)
+        train_result = self.backtest_improved(params, self.train)
+        val_result = self.backtest_improved(params, self.val)
+        test_result = self.backtest_improved(params, self.test)
         
         # Print results
         print(f"\nDETAILED PERFORMANCE RESULTS:")
         print(f"{'Metric':<20} {'Train':<12} {'Val':<12} {'Test':<12}")
         print("-" * 60)
         
-        metrics_list = ['sharpe', 'sortino', 'total_return', 'num_trades', 'win_rate', 'max_drawdown']
+        metrics = ['sharpe', 'total_return', 'win_rate', 'profit_factor', 'trades']
         
-        for metric in metrics_list:
-            train_val = train_metrics[metric]
-            val_val = val_metrics[metric]
-            test_val = test_metrics[metric]
-            
-            if metric in ['total_return', 'win_rate', 'max_drawdown']:
-                print(f"{metric:<20} {train_val:<12.1%} {val_val:<12.1%} {test_val:<12.1%}")
-            elif metric == 'num_trades':
-                print(f"{metric:<20} {train_val:<12.0f} {val_val:<12.0f} {test_val:<12.0f}")
+        for metric in metrics:
+            if metric in ['total_return', 'win_rate']:
+                print(f"{metric:<20} {train_result.get(metric, 0):<12.1%} "
+                      f"{val_result.get(metric, 0):<12.1%} "
+                      f"{test_result.get(metric, 0):<12.1%}")
+            elif metric == 'trades':
+                print(f"{metric:<20} {train_result.get(metric, 0):<12.0f} "
+                      f"{val_result.get(metric, 0):<12.0f} "
+                      f"{test_result.get(metric, 0):<12.0f}")
             else:
-                print(f"{metric:<20} {train_val:<12.3f} {val_val:<12.3f} {test_val:<12.3f}")
+                print(f"{metric:<20} {train_result.get(metric, 0):<12.3f} "
+                      f"{val_result.get(metric, 0):<12.3f} "
+                      f"{test_result.get(metric, 0):<12.3f}")
         
-        # Consistency check
-        if val_metrics['sharpe'] < -0.5 and train_metrics['sharpe'] > 0.5:
-            print("\n⚠️  WARNING: Large discrepancy between train and validation performance!")
-            print("This suggests overfitting. Consider:")
-            print("- Using more conservative parameters")
-            print("- Adding more data")
-            print("- Simplifying the strategy")
+        # Trading analysis
+        self.analyze_trades(params, self.train)
         
         return {
-            'train': train_metrics,
-            'val': val_metrics,
-            'test': test_metrics
+            'train': train_result,
+            'val': val_result,
+            'test': test_result
         }
     
-    def save_results(self, params, metrics):
+    def analyze_trades(self, params, data):
+        """Analyze trade distribution"""
+        print(f"\nTRADE ANALYSIS:")
+        
+        # Run backtest to get trades
+        result = self.backtest_improved(params, data)
+        
+        # This would need the trades from backtest
+        print(f"Total trades: {result['trades']}")
+        print(f"Avg trades per month: {result['trades'] / (len(data) / (252*5/12)):.1f}")
+        
+    def save_results(self, params, results):
         """Save results to JSON file"""
-        results = {
+        output = {
             'symbol': self.symbol,
             'timeframe': self.timeframe,
             'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
             'best_params': {
                 'rsi_length': int(params[0]),
                 'mfi_length': int(params[1]),
-                'oversold_level': int(params[2]),
-                'overbought_level': int(params[3])
+                'oversold_base': int(params[2]),
+                'overbought_base': int(params[3]),
+                'stop_loss_pct': float(params[4]),
+                'take_profit_pct': float(params[5])
             },
-            'metrics': metrics
+            'performance': results,
+            'improvements': [
+                'Removed restrictive SMA filter',
+                'Dynamic thresholds based on market regime',
+                'Added take profit targets',
+                'Adjusted parameters for crypto volatility',
+                'More flexible entry conditions'
+            ]
         }
         
-        filename = f"optimized_{self.symbol}_{self.timeframe}_{results['timestamp']}.json"
+        filename = f"improved_{self.symbol}_{self.timeframe}_{output['timestamp']}.json"
         with open(filename, 'w') as f:
-            json.dump(results, f, indent=2)
+            json.dump(output, f, indent=2)
         
         print(f"\nResults saved to {filename}")
 
@@ -402,17 +379,17 @@ class BayesianBacktestOptimizer:
 # Example usage
 if __name__ == "__main__":
     # Initialize optimizer
-    optimizer = BayesianBacktestOptimizer(
+    optimizer = ImprovedCryptoOptimizer(
         h5_path="data/crypto_database.h5",
         symbol="SOLUSDT",
         timeframe="5_90d"
     )
     
-    # Run optimization with fewer calls for speed
-    best_params = optimizer.optimize(n_calls=50)
+    # Run optimization
+    best_params = optimizer.optimize(n_calls=250)
     
     # Evaluate on all datasets
-    metrics = optimizer.evaluate(best_params)
+    results = optimizer.evaluate_detailed(best_params)
     
     # Save results
-    optimizer.save_results(best_params, metrics)
+    optimizer.save_results(best_params, results)

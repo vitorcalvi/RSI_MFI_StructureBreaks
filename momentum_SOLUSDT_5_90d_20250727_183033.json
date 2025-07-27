@@ -1,0 +1,56 @@
+{
+  "symbol": "SOLUSDT",
+  "timeframe": "5_90d",
+  "timestamp": "20250727_183033",
+  "strategy_type": "MOMENTUM",
+  "best_params": {
+    "rsi_length": 20,
+    "mfi_length": 20,
+    "momentum_buy": 70,
+    "momentum_sell": 33,
+    "strong_momentum": 85,
+    "stop_loss_pct": 0.08
+  },
+  "performance": {
+    "train": {
+      "score": -3.2250599691438753,
+      "trades": 52,
+      "sharpe": -1.4371462444304521,
+      "total_return": -0.9321494467697766,
+      "win_rate": 0.40384615384615385,
+      "profit_factor": 1.0057109132466262,
+      "max_drawdown": 0.9323269443241627,
+      "avg_win": 0.011726060634099972,
+      "avg_loss": -0.00789835361725229
+    },
+    "val": {
+      "score": -1.925797353498526,
+      "trades": 15,
+      "sharpe": -1.2649380507149623,
+      "total_return": -0.5210926290133043,
+      "win_rate": 0.3333333333333333,
+      "profit_factor": 1.502952820892091,
+      "max_drawdown": 0.5210926290133043,
+      "avg_win": 0.02517865022972332,
+      "avg_loss": -0.00837639408227675
+    },
+    "test": {
+      "score": -1.7541428438228321,
+      "trades": 16,
+      "sharpe": -1.229740919082058,
+      "total_return": -0.5323054465772687,
+      "win_rate": 0.5625,
+      "profit_factor": 2.2966030965920328,
+      "max_drawdown": 0.5344042175364068,
+      "avg_win": 0.013575935181662249,
+      "avg_loss": -0.007600257019114772
+    }
+  },
+  "notes": [
+    "Momentum strategy - opposite of traditional RSI usage",
+    "Buys on strength (RSI/MFI > threshold)",
+    "Sells on weakness (RSI/MFI < threshold)",
+    "Based on research showing crypto favors momentum",
+    "Uses trend filter for additional confirmation"
+  ]
+}
