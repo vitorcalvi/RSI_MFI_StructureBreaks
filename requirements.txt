@@ -29,3 +29,8 @@ aiohttp>=3.8.0
 
 # Performance
 numba>=0.57.0
+
+
+colorama
+python-dotenv
+pybit

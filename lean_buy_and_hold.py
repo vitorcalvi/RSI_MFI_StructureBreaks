@@ -3,7 +3,7 @@
 Unified Trading Tool for Jesse Bot
 Usage:
     # Basic market orders
-    python trade_bybit.py buy ETH/USDT                      # Market buy with defaults (0.4% SL, 1:2 RR)
+    python trade_bybit.py buy ETH/USDT                      # Market buy with defaults (0.4% SL, ATR trailing)
     python trade_bybit.py sell BTC/USDT                     # Market sell with defaults
     
     # Limit orders
@@ -11,14 +11,14 @@ Usage:
     python trade_bybit.py sell BTC/USDT --limit 95000      # Limit sell at $95,000
     
     # Custom stop loss
-    python trade_bybit.py buy SOL/USDT --stop 0.5          # 0.5% stop loss (TP auto 1.0% with 1:2 RR)
-    python trade_bybit.py buy SOL/USDT --sl 1.0            # 1% stop loss (TP auto 2% with 1:2 RR)
+    python trade_bybit.py buy SOL/USDT --stop 0.5          # 0.5% stop loss (no default TP)
+    python trade_bybit.py buy SOL/USDT --sl 1.0            # 1% stop loss (no default TP)
     
-    # Custom risk/reward ratio
+    # Custom risk/reward ratio (enables TP)
     python trade_bybit.py buy ETH/USDT --rr 5              # 1:5 risk/reward (0.4% SL, 2% TP)
     python trade_bybit.py sell BTC/USDT --stop 0.3 --rr 4  # 0.3% SL with 1:4 RR = 1.2% TP
     
-    # Custom take profit (overrides RR)
+    # Custom take profit (enables TP)
     python trade_bybit.py buy SOL/USDT --tp 2.5            # 2.5% take profit (RR auto-calculated)
     python trade_bybit.py buy ETH/USDT --sl 0.5 --tp 3     # 0.5% SL, 3% TP = 1:6 RR
     
@@ -27,7 +27,7 @@ Usage:
     python trade_bybit.py sell ETH/USDT --trail 0.5        # 0.5% trailing stop
     
     # Combined parameters
-    python trade_bybit.py buy ETH/USDT --limit 3500 --stop 0.6 --rr 4      # Limit with custom SL/RR
+    python trade_bybit.py buy ETH/USDT --limit 3500 --stop 0.6 --rr 4      # Limit with custom SL/RR (enables TP)
     python trade_bybit.py sell SOL/USDT --sl 0.8 --tp 4 --trail 0.3        # Custom SL/TP/Trail
     python trade_bybit.py buy BTC/USDT --market --stop 1 --trail 0.5       # Explicit market order
     
@@ -75,8 +75,8 @@ class Config:
         API_SECRET = os.getenv('LIVE_BYBIT_API_SECRET')
     
     # Defaults
-    STOP_LOSS = float(os.getenv('STOP_LOSS_PCT', '0.004'))
-    RISK_RATIO = float(os.getenv('RISK_RATIO', '2.0'))
+    STOP_LOSS = float(os.getenv('STOP_LOSS_PCT', '0.04')) 
+    RISK_RATIO = float(os.getenv('RISK_RATIO', '2.0'))  # Only used if --rr or --tp specified
     
     # Data files
     DATA_DIR = Path(os.getenv('DATA_DIR', 'data'))
@@ -456,14 +456,14 @@ def log_trade_to_csv(trade_data):
             trade_data['entry_price'],
             trade_data['actual_entry'],
             trade_data['stop_loss'],
-            trade_data['take_profit'],
-            trade_data['risk_reward'],
+            trade_data.get('take_profit', ''),
+            trade_data.get('risk_reward', ''),
             trade_data['trailing_pct'],
             trade_data['risk_usdt'],
-            trade_data['reward_usdt'],
+            trade_data.get('reward_usdt', ''),
             trade_data['net_risk'],
-            trade_data['net_reward'],
-            trade_data['net_rr'],
+            trade_data.get('net_reward', ''),
+            trade_data.get('net_rr', ''),
             trade_data['balance'],
             trade_data['position_size_pct'],
             trade_data['atr'],
@@ -525,48 +525,66 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
     stop_pct = stop_pct or Config.STOP_LOSS
     trail_pct = trail_pct or default_trail_pct
     
-    if tp_pct is None:
-        rr = rr or Config.RISK_RATIO
-        tp_pct = stop_pct * rr
+    # Only calculate TP if explicitly requested via --tp or --rr
+    use_tp = tp_pct is not None or rr is not None
+    if use_tp:
+        if tp_pct is None:
+            rr = rr or Config.RISK_RATIO
+            tp_pct = stop_pct * rr
+        else:
+            rr = tp_pct / stop_pct
     else:
-        rr = tp_pct / stop_pct
+        tp_pct = None
+        rr = None
     
     side = "Buy" if direction == 'long' else "Sell"
     entry = limit_price if order_type == "Limit" else current
     
     if direction == 'long':
         sl = entry * (1 - stop_pct)
-        tp = entry * (1 + tp_pct)
         be_trigger = entry * (1 + stop_pct)
         sl_sign = "-"
-        tp_sign = "+"
         be_sign = "+"
+        if use_tp:
+            tp = entry * (1 + tp_pct)
+            tp_sign = "+"
     else:
         sl = entry * (1 + stop_pct)
-        tp = entry * (1 - tp_pct)
         be_trigger = entry * (1 - stop_pct)
         sl_sign = "+"
-        tp_sign = "-"
         be_sign = "-"
+        if use_tp:
+            tp = entry * (1 - tp_pct)
+            tp_sign = "-"
     
     risk_usdt = abs(entry - sl) * float(qty)
-    reward_usdt = abs(tp - entry) * float(qty)
     
     fee_rate = 0.00055
     entry_fee = size_usdt * fee_rate
     
     if direction == 'long':
         exit_fee_at_sl = (size_usdt - risk_usdt) * fee_rate
-        exit_fee_at_tp = (size_usdt + reward_usdt) * fee_rate
     else:
         exit_fee_at_sl = (size_usdt + risk_usdt) * fee_rate
-        exit_fee_at_tp = (size_usdt - reward_usdt) * fee_rate
     
     fees_on_loss = entry_fee + exit_fee_at_sl
-    fees_on_win = entry_fee + exit_fee_at_tp
     net_loss = risk_usdt + fees_on_loss
-    net_profit = reward_usdt - fees_on_win
-    net_rr = net_profit / net_loss
+    
+    # TP-related calculations only if using TP
+    if use_tp:
+        reward_usdt = abs(tp - entry) * float(qty)
+        if direction == 'long':
+            exit_fee_at_tp = (size_usdt + reward_usdt) * fee_rate
+        else:
+            exit_fee_at_tp = (size_usdt - reward_usdt) * fee_rate
+        fees_on_win = entry_fee + exit_fee_at_tp
+        net_profit = reward_usdt - fees_on_win
+        net_rr = net_profit / net_loss
+        fee_impact = ((rr - net_rr) / rr) * 100
+    else:
+        net_profit = None
+        net_rr = None
+        fee_impact = None
     
     print(f"\n{'━' * 60}")
     print(f"{BOLD}🎯 {side.upper()} {symbol}{RST} @ ${format_price(info, entry)}")
@@ -576,7 +594,9 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
     
     print(f"{BOLD}💵 RISK FIRST:{RST}")
     print(f"   {R}• MAX LOSS: ${net_loss:,.2f} ({(net_loss/balance)*100:.2f}% of balance) ← YOUR ONLY CONCERN{RST}")
-    print(f"   • Profit Target: ${net_profit:,.2f} (bonus if hit)")
+    
+    if use_tp:
+        print(f"   • Profit Target: ${net_profit:,.2f} (bonus if hit)")
     
     be_distance = abs(be_trigger - entry)
     be_profit_gross = be_distance * float(qty)
@@ -586,8 +606,8 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
     
     print(f"   • Most Likely Profit: ${be_profit_net:,.2f} ({be_profit_multiplier:.2f}x risk) at BE trigger")
     
-    fee_impact = ((rr - net_rr) / rr) * 100
-    print(f"   • Net R:R: 1:{net_rr:.2f} (after {fee_impact:.0f}% fee impact)")
+    if use_tp:
+        print(f"   • Net R:R: 1:{net_rr:.2f} (after {fee_impact:.0f}% fee impact)")
     
     print(f"\n{BOLD}💰 Position:{RST}")
     print(f"   Balance: ${balance:,.2f}")
@@ -596,52 +616,55 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
     print(f"\n{BOLD}📊 Levels:{RST}")
     print(f"   Entry: ${format_price(info, entry)}")
     print(f"   Stop Loss: ${format_price(info, sl)} ({sl_sign}{stop_pct*100:.1f}%)")
-    print(f"   Take Profit: ${format_price(info, tp)} ({tp_sign}{tp_pct*100:.1f}%)")
+    if use_tp:
+        print(f"   Take Profit: ${format_price(info, tp)} ({tp_sign}{tp_pct*100:.1f}%)")
     print(f"   Break-Even Trigger: ${format_price(info, be_trigger)} ({be_sign}{stop_pct*100:.1f}%)")
     print(f"   Trailing: {trail_pct:.2f}% (Bybit native)")
     
-    win_rate_needed = 100 / (1 + net_rr)
     print(f"\n{Y}⚠️  RISK CHECK:{RST}")
     print(f"   • Can you afford to lose ${net_loss:,.2f}? YES → Proceed")
     print(f"   • Is {(net_loss/balance)*100:.2f}% risk per trade your plan? YES → Proceed")
-    print(f"   • Win Rate needed for profit: >{win_rate_needed:.0f}% (with 1:{net_rr:.2f} RR)")
+    if use_tp:
+        win_rate_needed = 100 / (1 + net_rr)
+        print(f"   • Win Rate needed for profit: >{win_rate_needed:.0f}% (with 1:{net_rr:.2f} RR)")
     
-    print(f"\n{BOLD}📈 Win Rate Reference (with 0.11% round-trip fees):{RST}")
-    print(f"   ┌─────────────┬──────────────────────┐")
-    print(f"   │ Target/Stop │ Break-Even Win Rate  │")
-    print(f"   ├─────────────┼──────────────────────┤")
-    
-    actual_stop = stop_pct
-    
-    # 1:1
-    reward_1_1 = actual_stop * 1
-    rr_1_1_gross = reward_1_1 - fee_rate * 2
-    rr_1_1_net = rr_1_1_gross / (actual_stop + fee_rate * 2)
-    wr_1_1 = 100 / (1 + rr_1_1_net)
-    
-    # 1:1.5
-    reward_1_15 = actual_stop * 1.5
-    rr_1_15_gross = reward_1_15 - fee_rate * 2
-    rr_1_15_net = rr_1_15_gross / (actual_stop + fee_rate * 2)
-    wr_1_15 = 100 / (1 + rr_1_15_net)
-    
-    # 1:2
-    reward_1_2 = actual_stop * 2
-    rr_1_2_gross = reward_1_2 - fee_rate * 2
-    rr_1_2_net = rr_1_2_gross / (actual_stop + fee_rate * 2)
-    wr_1_2 = 100 / (1 + rr_1_2_net)
-    
-    # 1:3
-    reward_1_3 = actual_stop * 3
-    rr_1_3_gross = reward_1_3 - fee_rate * 2
-    rr_1_3_net = rr_1_3_gross / (actual_stop + fee_rate * 2)
-    wr_1_3 = 100 / (1 + rr_1_3_net)
-    
-    print(f"   │ 1:1 ({actual_stop*100:.1f}%)  │ {wr_1_1:.0f}% 😰              │")
-    print(f"   │ 1:1.5       │ {wr_1_15:.0f}% 😐              │")
-    print(f"   │ 1:2         │ {wr_1_2:.0f}% ✅              │")
-    print(f"   │ 1:3         │ {wr_1_3:.0f}% 🎯              │")
-    print(f"   └─────────────┴──────────────────────┘")
+    if use_tp:
+        print(f"\n{BOLD}📈 Win Rate Reference (with 0.11% round-trip fees):{RST}")
+        print(f"   ┌─────────────┬──────────────────────┐")
+        print(f"   │ Target/Stop │ Break-Even Win Rate  │")
+        print(f"   ├─────────────┼──────────────────────┤")
+        
+        actual_stop = stop_pct
+        
+        # 1:1
+        reward_1_1 = actual_stop * 1
+        rr_1_1_gross = reward_1_1 - fee_rate * 2
+        rr_1_1_net = rr_1_1_gross / (actual_stop + fee_rate * 2)
+        wr_1_1 = 100 / (1 + rr_1_1_net)
+        
+        # 1:1.5
+        reward_1_15 = actual_stop * 1.5
+        rr_1_15_gross = reward_1_15 - fee_rate * 2
+        rr_1_15_net = rr_1_15_gross / (actual_stop + fee_rate * 2)
+        wr_1_15 = 100 / (1 + rr_1_15_net)
+        
+        # 1:2
+        reward_1_2 = actual_stop * 2
+        rr_1_2_gross = reward_1_2 - fee_rate * 2
+        rr_1_2_net = rr_1_2_gross / (actual_stop + fee_rate * 2)
+        wr_1_2 = 100 / (1 + rr_1_2_net)
+        
+        # 1:3
+        reward_1_3 = actual_stop * 3
+        rr_1_3_gross = reward_1_3 - fee_rate * 2
+        rr_1_3_net = rr_1_3_gross / (actual_stop + fee_rate * 2)
+        wr_1_3 = 100 / (1 + rr_1_3_net)
+        
+        print(f"   │ 1:1 ({actual_stop*100:.1f}%)  │ {wr_1_1:.0f}% 😰              │")
+        print(f"   │ 1:1.5       │ {wr_1_15:.0f}% 😐              │")
+        print(f"   │ 1:2         │ {wr_1_2:.0f}% ✅              │")
+        print(f"   │ 1:3         │ {wr_1_3:.0f}% 🎯              │")
+        print(f"   └─────────────┴──────────────────────┘")
     
     print(f"\n{'━' * 60}")
     confirm = input(f"Execute {side} {qty} {symbol.split('/')[0]} @ ${format_price(info, entry)}? (yes/no): ")
@@ -700,18 +723,21 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
         
         if direction == 'long':
             sl = actual_entry * (1 - stop_pct)
-            tp = actual_entry * (1 + tp_pct)
+            if use_tp:
+                tp = actual_entry * (1 + tp_pct)
         else:
             sl = actual_entry * (1 + stop_pct)
-            tp = actual_entry * (1 - tp_pct)
+            if use_tp:
+                tp = actual_entry * (1 - tp_pct)
         
-        set_trading_stops(exchange, symbol, linear, info, sl, tp, trail_pct, actual_entry)
+        set_trading_stops(exchange, symbol, linear, info, sl, tp if use_tp else None, trail_pct, actual_entry)
         
         print(f"\n{G}{'━' * 60}{RST}")
         print(f"{G}{BOLD}✅ Trade Executed!{RST}")
         print(f"{G}{'━' * 60}{RST}")
         print(f"📊 {side} {qty} {symbol} @ ${format_price(info, actual_entry)}")
-        print(f"🎯 Target: {tp_sign}{tp_pct*100:.1f}% @ ${format_price(info, tp)} ({G}+${net_profit:,.2f} net{RST})")
+        if use_tp:
+            print(f"🎯 Target: {tp_sign}{tp_pct*100:.1f}% @ ${format_price(info, tp)} ({G}+${net_profit:,.2f} net{RST})")
         print(f"🛑 Stop: {sl_sign}{stop_pct*100:.1f}% @ ${format_price(info, sl)} ({R}-${net_loss:,.2f} net{RST})")
         print(f"📈 Trailing: {trail_pct:.2f}% (Bybit native)")
         print(f"{G}{'━' * 60}{RST}")
@@ -725,14 +751,14 @@ def place_trade(direction, symbol, stop_pct=None, rr=None, tp_pct=None, trail_pc
             'entry_price': entry,
             'actual_entry': actual_entry,
             'stop_loss': sl,
-            'take_profit': tp,
-            'risk_reward': rr,
+            'take_profit': tp if use_tp else None,
+            'risk_reward': rr if use_tp else None,
             'trailing_pct': trail_pct,
             'risk_usdt': risk_usdt,
-            'reward_usdt': reward_usdt,
+            'reward_usdt': reward_usdt if use_tp else None,
             'net_risk': net_loss,
-            'net_reward': net_profit,
-            'net_rr': net_rr,
+            'net_reward': net_profit if use_tp else None,
+            'net_rr': net_rr if use_tp else None,
             'balance': balance,
             'position_size_pct': position_size_pct * 100,
             'atr': atr if atr else 0,
@@ -766,8 +792,8 @@ def main():
     order_group.add_argument('--limit', type=float, metavar='PRICE', help='Limit order at price')
     
     parser.add_argument('--stop', '--sl', type=float, metavar='%', help='Stop loss %')
-    parser.add_argument('--tp', type=float, metavar='%', help='Take profit %')
-    parser.add_argument('--rr', type=float, metavar='RATIO', help='Risk/Reward ratio')
+    parser.add_argument('--tp', type=float, metavar='%', help='Take profit % (enables TP)')
+    parser.add_argument('--rr', type=float, metavar='RATIO', help='Risk/Reward ratio (enables TP)')
     parser.add_argument('--trail', type=float, metavar='%', help='Trailing stop %')
     
     parser.add_argument('--real', action='store_true', help='Real money trading')
