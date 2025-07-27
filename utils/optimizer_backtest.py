@@ -1,187 +1,161 @@
-import os
-import sys
-import h5py
-import numpy as np
 import pandas as pd
+import numpy as np
+import h5py
+import json
 from datetime import datetime
 from skopt import gp_minimize
-from skopt.space import Integer
-from skopt.utils import use_named_args
-import json
+from skopt.space import Integer, Real
 import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
-
 class BayesianBacktestOptimizer:
-    def __init__(self, h5_path='data/crypto_database.h5', symbol='SOLUSDT', timeframe='1_30d'):
+    def __init__(self, h5_path, symbol, timeframe, initial_balance=10000):
         self.h5_path = h5_path
         self.symbol = symbol
         self.timeframe = timeframe
-        self.strategy_class = RSIMFICloudStrategy
+        self.initial_balance = initial_balance
+        self.commission = 0.001  # 0.1%
+        self.slippage = 0.0005   # 0.05%
         
-        self.initial_balance = 10000
-        self.commission = 0.001
-        self.slippage = 0.0005
-        
+        # Load and prepare data
         self.data = self._load_data()
-        
-        # Reduce data for faster optimization
-        if len(self.data) > 10000:
-            print(f"Reducing data from {len(self.data)} to last 10000 candles for optimization")
-            self.data = self.data.iloc[-10000:]
-        
-        self.train_size = 0.70
-        self.val_size = 0.15
-        self.test_size = 0.15
-        self._split_data()
+        self.train_data, self.val_data, self.test_data = self._split_data()
         
     def _load_data(self):
-        print(f"Loading data from {self.h5_path}")
+        """Load OHLCV data from HDF5 file"""
         with h5py.File(self.h5_path, 'r') as f:
-            dataset_path = f'{self.symbol}/{self.timeframe}'
-            table_path = f'{dataset_path}/table'
-            table = f[table_path][:]
+            path = f"{self.symbol}/{self.timeframe}/table"
+            data = pd.read_hdf(self.h5_path, path)
             
-            timestamps = table['values_block_0'][:, 0] / 1e9
-            ohlcv = table['values_block_1']
+        # Convert timestamp from nanoseconds
+        if 'timestamp' in data.columns:
+            data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ns')
+            data.set_index('timestamp', inplace=True)
             
-            df = pd.DataFrame({
-                'timestamp': pd.to_datetime(timestamps, unit='s'),
-                'open': ohlcv[:, 0],
-                'high': ohlcv[:, 1], 
-                'low': ohlcv[:, 2],
-                'close': ohlcv[:, 3],
-                'volume': ohlcv[:, 4],
-                'volume_usdt': ohlcv[:, 5]
-            })
-            
-            df.set_index('timestamp', inplace=True)
-            df = df.dropna()
-            print(f"Loaded {len(df)} candles")
-            return df
+        # Limit to last 10000 candles for faster optimization
+        return data.tail(10000).copy()
     
     def _split_data(self):
+        """Split data into train/validation/test sets"""
         n = len(self.data)
-        train_end = int(n * self.train_size)
-        val_end = int(n * (self.train_size + self.val_size))
+        train_end = int(n * 0.7)
+        val_end = int(n * 0.85)
         
-        self.train_data = self.data.iloc[:train_end]
-        self.val_data = self.data.iloc[train_end:val_end]
-        self.test_data = self.data.iloc[val_end:]
+        return (
+            self.data.iloc[:train_end].copy(),
+            self.data.iloc[train_end:val_end].copy(),
+            self.data.iloc[val_end:].copy()
+        )
+    
+    def _calculate_rsi(self, prices, length):
+        """Calculate RSI"""
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=length).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=length).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+    
+    def _calculate_mfi(self, data, length):
+        """Calculate Money Flow Index"""
+        typical_price = (data['high'] + data['low'] + data['close']) / 3
+        money_flow = typical_price * data['volume']
+        
+        positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0)
+        negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0)
+        
+        pos_mf = positive_flow.rolling(window=length).sum()
+        neg_mf = negative_flow.rolling(window=length).sum()
+        
+        mfr = pos_mf / neg_mf
+        return 100 - (100 / (1 + mfr))
     
     def backtest(self, params, data):
-        print(f"Starting backtest with {len(data)} candles...")
-        strategy = self.strategy_class(params)
+        """Run backtest simulation"""
+        rsi_length = int(params['rsi_length'])
+        mfi_length = int(params['mfi_length'])
+        oversold = params['oversold_level']
+        overbought = params['overbought_level']
         
+        # Calculate indicators
+        rsi = self._calculate_rsi(data['close'], rsi_length)
+        mfi = self._calculate_mfi(data, mfi_length)
+        
+        # Generate signals
+        buy_signal = (rsi < oversold) & (mfi < oversold)
+        sell_signal = (rsi > overbought) | (mfi > overbought)
+        
+        # Backtest simulation
+        position = 0
         balance = self.initial_balance
-        position = None
         trades = []
-        equity_curve = []
+        equity_curve = [balance]
         
-        # Start from minimum required candles for indicators
-        start_idx = max(50, params.get('rsi_length', 14) + params.get('mfi_length', 14))
-        
-        for i in range(start_idx, len(data)):
-            if i % 1000 == 0:  # Progress indicator
-                print(f"Progress: {i}/{len(data)} candles processed")
+        for i in range(max(rsi_length, mfi_length), len(data)):
+            current_price = data['close'].iloc[i]
             
-            # Only pass last 100 candles to strategy for efficiency
-            lookback = min(i+1, 100)
-            current_data = data.iloc[i+1-lookback:i+1]
-            signal = strategy.generate_signal(current_data)
-            current_data = data.iloc[:i+1]
-            signal = strategy.generate_signal(current_data)
-            
-            if signal:
-                current_price = data['close'].iloc[i]
-                current_time = data.index[i]
+            # Buy signal
+            if buy_signal.iloc[i] and position == 0:
+                position_size = (balance * 0.95) / current_price
+                cost = position_size * current_price * (1 + self.commission + self.slippage)
                 
-                if signal['action'] == 'BUY' and position is None:
-                    entry_price = current_price * (1 + self.slippage)
-                    position_size = (balance * 0.95) / entry_price
-                    commission_paid = position_size * entry_price * self.commission
-                    
-                    position = {
-                        'entry_price': entry_price,
-                        'size': position_size,
-                        'entry_time': current_time
-                    }
-                    
-                    balance -= (position_size * entry_price + commission_paid)
-                    
-                elif signal['action'] == 'SELL' and position is not None:
-                    exit_price = current_price * (1 - self.slippage)
-                    position_value = position['size'] * exit_price
-                    commission_paid = position_value * self.commission
-                    
-                    pnl = position_value - (position['size'] * position['entry_price'])
-                    balance += (position_value - commission_paid)
-                    
-                    trades.append({
-                        'pnl': pnl,
-                        'pnl_pct': (pnl / (position['size'] * position['entry_price'])) * 100
-                    })
-                    
-                    position = None
+                if cost <= balance:
+                    balance -= cost
+                    position = position_size
+                    entry_price = current_price * (1 + self.commission + self.slippage)
+                    entry_time = data.index[i]
             
-            current_equity = balance
-            if position:
-                current_equity += position['size'] * data['close'].iloc[i]
+            # Sell signal
+            elif sell_signal.iloc[i] and position > 0:
+                proceeds = position * current_price * (1 - self.commission - self.slippage)
+                balance += proceeds
+                exit_price = current_price * (1 - self.commission - self.slippage)
+                
+                # Record trade
+                trades.append({
+                    'entry_time': entry_time,
+                    'exit_time': data.index[i],
+                    'entry_price': entry_price,
+                    'exit_price': exit_price,
+                    'pnl': proceeds - (position * entry_price),
+                    'return_pct': (exit_price / entry_price - 1) * 100
+                })
+                position = 0
+            
+            # Update equity curve
+            current_equity = balance + (position * current_price if position > 0 else 0)
             equity_curve.append(current_equity)
-        
-        if position:
-            exit_price = data['close'].iloc[-1] * (1 - self.slippage)
-            position_value = position['size'] * exit_price
-            commission_paid = position_value * self.commission
-            pnl = position_value - (position['size'] * position['entry_price'])
-            balance += (position_value - commission_paid)
             
-            trades.append({
-                'pnl': pnl,
-                'pnl_pct': (pnl / (position['size'] * position['entry_price'])) * 100
-            })
+            # Progress indicator
+            if i % 1000 == 0:
+                print(f"Processed {i}/{len(data)} candles", end='\r')
         
-        # Add initial balance at the beginning
-        equity_curve = [self.initial_balance] + equity_curve
-        
-        metrics = self._calculate_metrics(trades, equity_curve)
-        return metrics, trades
+        return trades, equity_curve
     
     def _calculate_metrics(self, trades, equity_curve):
+        """Calculate performance metrics"""
         if len(trades) == 0:
             return {
-                'sharpe_ratio': -999,
-                'total_return': -1,
+                'sharpe_ratio': 0,
+                'total_return': 0,
                 'win_rate': 0,
                 'num_trades': 0
             }
         
-        equity_curve = np.array(equity_curve)
+        # Calculate returns
+        equity_series = pd.Series(equity_curve)
+        returns = equity_series.pct_change().dropna()
         
-        # Calculate returns safely
-        if len(equity_curve) > 1:
-            returns = []
-            for i in range(1, len(equity_curve)):
-                if equity_curve[i-1] > 0:
-                    ret = (equity_curve[i] - equity_curve[i-1]) / equity_curve[i-1]
-                    returns.append(ret)
-            returns = np.array(returns)
-        else:
-            returns = np.array([])
-        
-        total_return = (equity_curve[-1] - self.initial_balance) / self.initial_balance
-        
-        if len(returns) > 1 and np.std(returns) > 1e-8:
-            periods_per_year = 365 * 24  # hourly bars
-            sharpe_ratio = np.sqrt(periods_per_year) * np.mean(returns) / np.std(returns)
+        # Sharpe ratio (annualized for hourly data)
+        if returns.std() > 0:
+            sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(8760)  # 24*365 hours
         else:
             sharpe_ratio = 0
         
-        winning_trades = [t for t in trades if t['pnl'] > 0]
-        win_rate = len(winning_trades) / len(trades) if trades else 0
+        # Other metrics
+        total_return = ((equity_curve[-1] / self.initial_balance) - 1) * 100
+        winning_trades = sum(1 for trade in trades if trade['pnl'] > 0)
+        win_rate = (winning_trades / len(trades)) * 100
         
         return {
             'sharpe_ratio': sharpe_ratio,
@@ -190,33 +164,41 @@ class BayesianBacktestOptimizer:
             'num_trades': len(trades)
         }
     
-    def objective(self, params_dict):
-        print(f"Testing params: {params_dict}")
-        train_metrics, _ = self.backtest(params_dict, self.train_data)
-        print(f"Train complete: trades={train_metrics['num_trades']}, sharpe={train_metrics['sharpe_ratio']:.2f}")
-        val_metrics, _ = self.backtest(params_dict, self.val_data)
-        print(f"Val complete: trades={val_metrics['num_trades']}, sharpe={val_metrics['sharpe_ratio']:.2f}")
+    def objective(self, params_list):
+        """Objective function for Bayesian optimization"""
+        params = {
+            'rsi_length': params_list[0],
+            'mfi_length': params_list[1],
+            'oversold_level': params_list[2],
+            'overbought_level': params_list[3]
+        }
         
-        # Handle edge cases
-        if train_metrics['num_trades'] == 0 or val_metrics['num_trades'] == 0:
-            return 999  # Bad score
+        # Train metrics
+        train_trades, train_equity = self.backtest(params, self.train_data)
+        train_metrics = self._calculate_metrics(train_trades, train_equity)
         
-        combined_sharpe = (train_metrics['sharpe_ratio'] * 0.7 + 
-                          val_metrics['sharpe_ratio'] * 0.3)
+        # Validation metrics
+        val_trades, val_equity = self.backtest(params, self.val_data)
+        val_metrics = self._calculate_metrics(val_trades, val_equity)
         
-        # Softer trade penalty
-        trade_penalty = 0
-        if train_metrics['num_trades'] < 10:
-            trade_penalty = 1.0  # Fixed penalty instead of scaling
+        # Combined score with penalty for insufficient trades
+        train_score = train_metrics['sharpe_ratio']
+        val_score = val_metrics['sharpe_ratio']
         
-        score = -(combined_sharpe - trade_penalty)
-        print(f"Objective score: {score:.4f}\n")
-        return score
+        if train_metrics['num_trades'] < 10 or val_metrics['num_trades'] < 5:
+            penalty = -2.0
+        else:
+            penalty = 0
+        
+        # Weighted combination (70% train, 30% validation)
+        combined_score = (0.7 * train_score + 0.3 * val_score) + penalty
+        
+        # Return negative for minimization
+        return -combined_score
     
     def optimize(self, n_calls=50):
-        print("\nStarting Bayesian Optimization...")
-        
-        # Only optimize parameters that the strategy actually uses
+        """Run Bayesian optimization"""
+        # Define search space
         space = [
             Integer(5, 30, name='rsi_length'),
             Integer(5, 30, name='mfi_length'),
@@ -224,23 +206,16 @@ class BayesianBacktestOptimizer:
             Integer(55, 80, name='overbought_level')
         ]
         
-        @use_named_args(space)
-        def objective_wrapper(**params):
-            params['require_volume'] = False
-            params['require_trend'] = False
-            return self.objective(params)
-        
+        print("Starting Bayesian optimization...")
         result = gp_minimize(
-            func=objective_wrapper,
+            func=self.objective,
             dimensions=space,
             n_calls=n_calls,
-            n_initial_points=10,
-            acq_func='EI',
-            noise=0.01,
-            verbose=True,
-            random_state=42
+            random_state=42,
+            acq_func='EI'
         )
         
+        # Best parameters
         best_params = {
             'rsi_length': result.x[0],
             'mfi_length': result.x[1],
@@ -250,85 +225,105 @@ class BayesianBacktestOptimizer:
             'require_trend': False
         }
         
-        print(f"\nBest parameters: {best_params}")
-        print(f"Best score: {-result.fun:.4f}")
-        
-        return best_params, result
+        self.optimization_result = result
+        return best_params
     
     def run_oos_test(self, params):
-        print("\nRunning Out-of-Sample Test...")
+        """Run out-of-sample test"""
+        # Test all three datasets
+        datasets = {
+            'Train': self.train_data,
+            'Val': self.val_data,
+            'Test': self.test_data
+        }
         
-        train_metrics, _ = self.backtest(params, self.train_data)
-        val_metrics, _ = self.backtest(params, self.val_data)
-        test_metrics, _ = self.backtest(params, self.test_data)
+        results = {}
+        for name, data in datasets.items():
+            trades, equity = self.backtest(params, data)
+            metrics = self._calculate_metrics(trades, equity)
+            results[name] = metrics
         
-        print("\nBacktest Results:")
-        print("="*50)
-        print(f"{'Metric':<20} {'Train':>10} {'Val':>10} {'Test':>10}")
-        print("-"*50)
-        
-        metrics = ['sharpe_ratio', 'total_return', 'win_rate', 'num_trades']
-        for metric in metrics:
-            train_val = train_metrics[metric]
-            val_val = val_metrics[metric]
-            test_val = test_metrics[metric]
-            
-            if metric in ['total_return', 'win_rate']:
-                print(f"{metric:<20} {train_val*100:>10.2f} {val_val*100:>10.2f} {test_val*100:>10.2f}")
-            elif metric == 'num_trades':
-                print(f"{metric:<20} {train_val:>10.0f} {val_val:>10.0f} {test_val:>10.0f}")
-            else:
-                print(f"{metric:<20} {train_val:>10.2f} {val_val:>10.2f} {test_val:>10.2f}")
-        
-        return train_metrics, val_metrics, test_metrics
+        return results
     
     def save_results(self, params, metrics):
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'optimization_results_{self.symbol}_{timestamp}.json'
+        """Save optimization results"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"optimization_results_{self.symbol}_{self.timeframe}_{timestamp}.json"
         
         results = {
             'symbol': self.symbol,
             'timeframe': self.timeframe,
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': timestamp,
             'best_params': params,
             'metrics': metrics
         }
         
         with open(filename, 'w') as f:
-            json.dump(results, f, indent=4)
+            json.dump(results, f, indent=2)
         
-        print(f"\nResults saved to {filename}")
-
-
-def main():
-    optimizer = BayesianBacktestOptimizer(
-        h5_path='data/crypto_database.h5',
-        symbol='SOLUSDT',
-        timeframe='1_30d'
-    )
+        print(f"Results saved to {filename}")
+        return filename
     
-    # Reduced n_calls for faster testing
-    best_params, optimization_result = optimizer.optimize(n_calls=20)
+    def plot_convergence(self):
+        """Plot optimization convergence"""
+        if not hasattr(self, 'optimization_result'):
+            print("Run optimization first")
+            return
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(-np.array(self.optimization_result.func_vals))
+        plt.title('Optimization Convergence')
+        plt.xlabel('Iteration')
+        plt.ylabel('Objective Value (Sharpe Ratio)')
+        plt.grid(True)
+        plt.show()
     
-    train_metrics, val_metrics, test_metrics = optimizer.run_oos_test(best_params)
-    
-    optimizer.save_results(
-        best_params, 
-        {
-            'train': train_metrics,
-            'validation': val_metrics,
-            'test': test_metrics
-        }
-    )
-    
-    plt.figure(figsize=(10, 6))
-    plt.plot(optimization_result.func_vals)
-    plt.xlabel('Iteration')
-    plt.ylabel('Objective Value')
-    plt.title('Bayesian Optimization Convergence')
-    plt.grid(True)
-    plt.savefig('optimization_convergence.png')
+    def generate_report(self, params):
+        """Generate comprehensive performance report"""
+        results = self.run_oos_test(params)
+        
+        print("\n" + "="*60)
+        print(f"OPTIMIZATION RESULTS: {self.symbol} {self.timeframe}")
+        print("="*60)
+        
+        print("\nBest Parameters:")
+        for key, value in params.items():
+            print(f"  {key}: {value}")
+        
+        print(f"\n{'Metric':<20} {'Train':<12} {'Val':<12} {'Test':<12}")
+        print("-" * 60)
+        
+        for metric in ['sharpe_ratio', 'total_return', 'win_rate', 'num_trades']:
+            row = f"{metric:<20}"
+            for dataset in ['Train', 'Val', 'Test']:
+                value = results[dataset][metric]
+                if metric in ['sharpe_ratio']:
+                    row += f"{value:>11.2f} "
+                elif metric in ['total_return', 'win_rate']:
+                    row += f"{value:>10.2f}% "
+                else:
+                    row += f"{value:>11.0f} "
+            print(row)
+        
+        return results
 
-
+# Example usage
 if __name__ == "__main__":
-    main()
+    # Initialize optimizer
+    optimizer = BayesianBacktestOptimizer(
+        h5_path="data/crypto_database.h5",
+        symbol="BTCUSDT",
+        timeframe="1h"
+    )
+    
+    # Run optimization
+    best_params = optimizer.optimize(n_calls=50)
+    
+    # Generate report
+    results = optimizer.generate_report(best_params)
+    
+    # Save results
+    optimizer.save_results(best_params, results)
+    
+    # Plot convergence
+    optimizer.plot_convergence()
