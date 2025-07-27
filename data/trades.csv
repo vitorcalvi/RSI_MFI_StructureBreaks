@@ -1,0 +1,2 @@
+timestamp,symbol,side,order_type,qty,entry_price,actual_entry,stop_loss,take_profit,risk_reward,trailing_pct,risk_usdt,reward_usdt,net_risk,net_reward,net_rr,balance,position_size_pct,atr,mode
+2025-07-27T13:49:19.706494,ETH/USDT,Buy,Market,1.45,3809.01,3809.09,3793.8536400000003,3839.5627200000004,2.0,0.4294141672358063,22.09225800000033,44.18451600000001,28.19126299288608,38.04905878141426,1.3496755640574083,111111.92245065,5.0,16.356428571428587,Demo

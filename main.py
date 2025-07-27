@@ -7,7 +7,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Add project root to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from core.trade_engine import TradeEngine
 
@@ -34,6 +36,8 @@ async def main():
         print("\n⚠️  Stopping bot...")
     except Exception as e:
         print(f"❌ Runtime error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         try:
             await engine.stop()
