@@ -1,202 +1,218 @@
 #!/usr/bin/env python3
 """
-Simple connection test for the trading bot
-Run this first to verify everything works
+Automated Setup and System Check for Trading Bot
+Handles installation, configuration, and testing
 """
 
 import os
 import sys
-import asyncio
-import ccxt
-import pandas as pd
-from dotenv import load_dotenv
+import subprocess
+import json
+from pathlib import Path
 
-# Load environment variables
-load_dotenv()
+def check_python_version():
+    """Check Python version compatibility"""
+    version = sys.version_info
+    if version.major < 3 or (version.major == 3 and version.minor < 8):
+        print("❌ Python 3.8+ required. Current version:", sys.version)
+        return False
+    print(f"✅ Python {version.major}.{version.minor}.{version.micro}")
+    return True
 
-def test_ccxt_connection():
-    """Test basic CCXT connection to Bybit testnet"""
-    print("🔗 Testing CCXT connection...")
+def install_dependencies():
+    """Install required dependencies"""
+    print("\n📦 Installing Dependencies...")
     
     try:
-        exchange = ccxt.bybit({
-            'enableRateLimit': True,
-            'sandbox': True,
-            'options': {
-                'defaultType': 'swap',
-                'adjustForTimeDifference': True
-            }
-        })
-        
-        # Load markets
-        markets = exchange.load_markets()
-        print(f"✅ Connected to Bybit testnet - {len(markets)} markets loaded")
-        
-        # Test data fetch
-        symbol = 'SOL/USDT'
-        if symbol in markets:
-            ohlcv = exchange.fetch_ohlcv(symbol, '1m', limit=10)
-            print(f"✅ Fetched {len(ohlcv)} candles for {symbol}")
-            
-            # Show last price
-            last_price = ohlcv[-1][4]  # Close price
-            print(f"💰 {symbol} last price: ${last_price:.4f}")
-        else:
-            print(f"❌ {symbol} not found in markets")
-            
-        return True
-        
-    except Exception as e:
-        print(f"❌ CCXT connection failed: {e}")
-        return False
-
-def test_strategy_import():
-    """Test strategy module import"""
-    print("\n📊 Testing strategy import...")
-    
-    try:
-        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-        from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
-        
-        strategy = RSIMFICloudStrategy()
-        print(f"✅ Strategy loaded with params: {strategy.params}")
-        
-        # Test with dummy data
-        dates = pd.date_range('2024-01-01', periods=50, freq='1min')
-        dummy_data = pd.DataFrame({
-            'open': [100] * 50,
-            'high': [101] * 50,
-            'low': [99] * 50,
-            'close': [100.5] * 50,
-            'volume': [1000] * 50
-        }, index=dates)
-        
-        # Test indicator calculation
-        result = strategy.calculate_indicators(dummy_data)
-        print(f"✅ Indicators calculated - RSI: {result['rsi'].iloc[-1]:.2f}, MFI: {result['mfi'].iloc[-1]:.2f}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Strategy import failed: {e}")
-        return False
-
-def test_telegram():
-    """Test Telegram notification"""
-    print("\n📱 Testing Telegram...")
-    
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    
-    if bot_token and chat_id:
-        try:
-            from telegram import Bot
-            import asyncio
-            
-            async def telegram_test():
-                bot = Bot(token=bot_token)
-                
-                # Test connection
-                await bot.get_me()
-                print("✅ Telegram bot token is valid")
-                
-                # Send test message
-                await bot.send_message(chat_id=chat_id, text="🤖 Trading bot test message")
-                print("✅ Test message sent to Telegram")
-                
-            # Run in new event loop to avoid conflicts
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(telegram_test())
-                loop.close()
-            except:
-                # Fallback - try with existing loop
-                asyncio.run(telegram_test())
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Telegram test failed: {e}")
+        # Check if requirements.txt exists
+        if not os.path.exists('requirements.txt'):
+            print("❌ requirements.txt not found")
             return False
-    else:
-        print("⚠️  Telegram credentials not found in .env")
-        return False
-
-async def test_full_bot():
-    """Test the full bot initialization"""
-    print("\n🤖 Testing full bot initialization...")
-    
-    try:
-        from core.trade_engine import TradeEngine
-        
-        engine = TradeEngine()
-        print("✅ Trade engine created successfully")
-        
-        # Test data fetching
-        symbol = 'SOL/USDT'
-        df = await engine.fetch_ohlcv(symbol, timeframe='1m', limit=20)
-        
-        if df is not None and len(df) > 0:
-            print(f"✅ Data fetched: {len(df)} candles")
-            print(f"📊 Last price: ${df['close'].iloc[-1]:.4f}")
             
-            # Test signal generation
-            signal = engine.strategy.generate_signal(df)
-            if signal:
-                print(f"🎯 Signal generated: {signal}")
-            else:
-                print("📈 No signal (normal)")
-                
+        # Install dependencies
+        result = subprocess.run([
+            sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt'
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print("✅ Dependencies installed successfully")
             return True
         else:
-            print("❌ No data fetched")
+            print(f"❌ Installation failed: {result.stderr}")
             return False
             
     except Exception as e:
-        print(f"❌ Full bot test failed: {e}")
+        print(f"❌ Installation error: {e}")
         return False
 
-def main():
-    """Run all tests"""
-    print("🧪 Running Trading Bot Tests\n" + "="*50)
+def create_env_file():
+    """Create .env file if it doesn't exist"""
+    print("\n⚙️ Setting up configuration...")
     
-    tests = [
-        test_ccxt_connection,
-        test_strategy_import,
-        test_telegram,
+    if os.path.exists('.env'):
+        print("✅ .env file already exists")
+        return True
+        
+    env_template = """# Trading Configuration
+SYMBOLS=SOL/USDT
+EXCHANGE=bybit
+DEMO_MODE=true
+
+# Bybit Live Trading API (set DEMO_MODE=false to use)
+BYBIT_API_KEY=your_live_api_key_here
+BYBIT_API_SECRET=your_live_secret_here
+
+# Bybit Testnet API (for demo mode)
+TESTNET_BYBIT_API_KEY=your_testnet_api_key_here
+TESTNET_BYBIT_API_SECRET=your_testnet_secret_here
+
+# Telegram Notifications (optional)
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
+
+# Notes:
+# - Get Bybit testnet keys from: https://testnet.bybit.com
+# - Get Bybit live keys from: https://www.bybit.com  
+# - Create Telegram bot with @BotFather for notifications
+# - Start with DEMO_MODE=true for paper trading
+"""
+    
+    try:
+        with open('.env', 'w') as f:
+            f.write(env_template)
+        print("✅ Created .env file with default configuration")
+        print("💡 Edit .env file to add your API keys")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to create .env file: {e}")
+        return False
+
+def check_file_structure():
+    """Verify all required files exist"""
+    print("\n📁 Checking File Structure...")
+    
+    required_files = [
+        'main.py',
+        'comprehensive_test.py',
+        'core/trade_engine.py',
+        'core/risk_management.py',
+        'core/telegram_notifier.py',
+        'strategies/RSI_MFI_Cloud.py',
+        'strategies/params_RSI_MFI_Cloud.json',
+        'requirements.txt'
     ]
     
-    results = []
-    for test in tests:
-        try:
-            result = test()
-            results.append(result)
-        except Exception as e:
-            print(f"❌ Test crashed: {e}")
-            results.append(False)
-    
-    # Run async test
-    try:
-        async_result = asyncio.run(test_full_bot())
-        results.append(async_result)
-    except Exception as e:
-        print(f"❌ Async test crashed: {e}")
-        results.append(False)
-    
-    print("\n" + "="*50)
-    print("📋 TEST SUMMARY:")
-    print(f"✅ Passed: {sum(results)}/{len(results)}")
-    print(f"❌ Failed: {len(results) - sum(results)}/{len(results)}")
-    
-    if all(results):
-        print("\n🎉 ALL TESTS PASSED - Bot ready to run!")
-        print("💡 Run: python main.py")
+    missing_files = []
+    for file_path in required_files:
+        if os.path.exists(file_path):
+            print(f"✅ {file_path}")
+        else:
+            print(f"❌ {file_path} - MISSING")
+            missing_files.append(file_path)
+            
+    if missing_files:
+        print(f"\n❌ Missing {len(missing_files)} required files")
+        return False
     else:
-        print("\n⚠️  Some tests failed - check errors above")
+        print("\n✅ All required files present")
+        return True
+
+def run_comprehensive_test():
+    """Run the comprehensive system test"""
+    print("\n🧪 Running Comprehensive System Test...")
+    print("=" * 50)
+    
+    try:
+        result = subprocess.run([
+            sys.executable, 'comprehensive_test.py'
+        ], capture_output=False, text=True)
         
-    return all(results)
+        return result.returncode == 0
+        
+    except Exception as e:
+        print(f"❌ Test execution failed: {e}")
+        return False
+
+def show_next_steps(test_passed):
+    """Show next steps based on test results"""
+    print("\n" + "=" * 50)
+    print("🎯 NEXT STEPS")
+    print("=" * 50)
+    
+    if test_passed:
+        print("🎉 System is ready!")
+        print("\n📋 To start trading:")
+        print("1. Edit .env file with your API keys (optional for demo mode)")
+        print("2. Run: python main.py")
+        print("\n💡 Tips:")
+        print("- Start with DEMO_MODE=true for safety")
+        print("- Monitor Telegram for trade alerts")
+        print("- Check strategies/params_RSI_MFI_Cloud.json to adjust settings")
+        
+    else:
+        print("⚠️  System needs attention!")
+        print("\n🔧 Common fixes:")
+        print("1. Install missing dependencies: pip install -r requirements.txt")
+        print("2. Check .env file configuration")
+        print("3. Verify API keys at https://testnet.bybit.com")
+        print("4. Run: python comprehensive_test.py")
+        
+    print("\n📚 Documentation:")
+    print("- Strategy params: strategies/params_RSI_MFI_Cloud.json")
+    print("- Risk settings: core/risk_management.py")
+    print("- Test reports: test_report_*.json")
+
+def main():
+    """Main setup routine"""
+    print("🚀 TRADING BOT SETUP & SYSTEM CHECK")
+    print("=" * 50)
+    print("This script will:")
+    print("1. Check Python version")
+    print("2. Install dependencies")
+    print("3. Create configuration files")
+    print("4. Verify file structure")
+    print("5. Run comprehensive tests")
+    print("6. Show next steps")
+    print()
+    
+    # Setup steps
+    steps = [
+        ("Python Version Check", check_python_version),
+        ("Install Dependencies", install_dependencies),
+        ("Create Configuration", create_env_file),
+        ("File Structure Check", check_file_structure)
+    ]
+    
+    setup_success = True
+    for step_name, step_func in steps:
+        print(f"\n{'='*20} {step_name} {'='*20}")
+        if not step_func():
+            setup_success = False
+            print(f"❌ {step_name} failed")
+            break
+        else:
+            print(f"✅ {step_name} completed")
+    
+    if not setup_success:
+        print("\n❌ Setup failed. Fix errors above and try again.")
+        return False
+    
+    # Run comprehensive test
+    print(f"\n{'='*20} System Test {'='*20}")
+    test_passed = run_comprehensive_test()
+    
+    # Show next steps
+    show_next_steps(test_passed)
+    
+    return test_passed
 
 if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1)
+    try:
+        success = main()
+        sys.exit(0 if success else 1)
+    except KeyboardInterrupt:
+        print("\n⚠️  Setup interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Setup failed with error: {e}")
+        sys.exit(1)
