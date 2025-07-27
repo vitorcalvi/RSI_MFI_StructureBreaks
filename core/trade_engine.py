@@ -280,7 +280,7 @@ class TradeEngine:
         except Exception as e:
             print(f"❌ Position close error: {e}")
             return False
-    
+
     async def run_cycle(self):
         """Run one trading cycle"""
         try:
@@ -292,20 +292,41 @@ class TradeEngine:
             # Check position
             self.check_position()
             
-            # Generate signal
+            # Generate signal and get indicators
             signal = self.strategy.generate_signal(df)
             
-            # Log current state
+            # Get current values
             current_price = df['close'].iloc[-1]
-            current_rsi = df['rsi'].iloc[-1] if 'rsi' in df else 0
-            current_mfi = df['mfi'].iloc[-1] if 'mfi' in df else 0
             
+            # Calculate RSI and MFI directly
+            try:
+                # RSI calculation
+                delta = df['close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                rs = gain / loss
+                current_rsi = 100 - (100 / (1 + rs.iloc[-1]))
+                
+                # MFI calculation
+                typical_price = (df['high'] + df['low'] + df['close']) / 3
+                money_flow = typical_price * df['volume']
+                delta_tp = typical_price.diff()
+                positive_flow = money_flow.where(delta_tp > 0, 0).rolling(window=14).sum()
+                negative_flow = money_flow.where(delta_tp < 0, 0).rolling(window=14).sum()
+                money_ratio = positive_flow / negative_flow
+                current_mfi = 100 - (100 / (1 + money_ratio.iloc[-1]))
+                
+            except Exception as e:
+                current_rsi = 0.0
+                current_mfi = 0.0
+            
+            # Log current state
             print(f"\r[{datetime.now().strftime('%H:%M:%S')}] "
-                  f"Price: ${current_price:.4f} | "
-                  f"RSI: {current_rsi:.1f} | "
-                  f"MFI: {current_mfi:.1f} | "
-                  f"Position: {self.position['side'] if self.position else 'None'}", 
-                  end='', flush=True)
+                f"Price: ${current_price:.4f} | "
+                f"RSI: {current_rsi:.1f} | "
+                f"MFI: {current_mfi:.1f} | "
+                f"Position: {self.position['side'] if self.position else 'None'}", 
+                end='', flush=True)
             
             # Handle signals
             if signal:
@@ -314,7 +335,7 @@ class TradeEngine:
                 if self.position:
                     # Check if we should reverse position
                     if (self.position['side'] == 'Buy' and signal['action'] == 'SELL') or \
-                       (self.position['side'] == 'Sell' and signal['action'] == 'BUY'):
+                    (self.position['side'] == 'Sell' and signal['action'] == 'BUY'):
                         await self.close_position()
                         await asyncio.sleep(2)
                         await self.open_position(signal)
@@ -326,6 +347,7 @@ class TradeEngine:
             
         except Exception as e:
             print(f"\n❌ Cycle error: {e}")
+
     
     async def run(self):
         """Main trading loop"""
