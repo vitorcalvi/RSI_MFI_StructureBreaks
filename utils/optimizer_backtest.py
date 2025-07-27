@@ -17,6 +17,7 @@ class BayesianBacktestOptimizer:
         self.initial_balance = initial_balance
         self.commission = 0.001  # 0.1%
         self.slippage = 0.0005   # 0.05%
+        self.debug_mode = True   # Show debug info on first run
         
         # Load and prepare data
         self.data = self._load_data()
@@ -24,14 +25,39 @@ class BayesianBacktestOptimizer:
         
     def _load_data(self):
         """Load OHLCV data from HDF5 file"""
-        with h5py.File(self.h5_path, 'r') as f:
-            path = f"{self.symbol}/{self.timeframe}/table"
-            data = pd.read_hdf(self.h5_path, path)
-            
-        # Convert timestamp from nanoseconds
+        path = f"{self.symbol}/{self.timeframe}"
+        data = pd.read_hdf(self.h5_path, path)
+        
+        # Debug: Check data format
+        print(f"Loaded data shape: {data.shape}")
+        print(f"Columns: {list(data.columns)}")
+        print(f"Index: {data.index.name}")
+        print(f"First few rows:\n{data.head(3)}")
+        
+        # Standardize column names to lowercase
+        data.columns = [col.lower() for col in data.columns]
+        
+        # Convert timestamp from nanoseconds if needed
         if 'timestamp' in data.columns:
             data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ns')
             data.set_index('timestamp', inplace=True)
+        elif data.index.name != 'timestamp' and len(data.index) > 0:
+            # If index is already datetime, keep it
+            pass
+            
+        # Ensure we have required columns
+        required_cols = ['open', 'high', 'low', 'close', 'volume']
+        missing_cols = [col for col in required_cols if col not in data.columns]
+        if missing_cols:
+            print(f"Warning: Missing columns {missing_cols}")
+            
+        # Check if we have enough data for meaningful analysis
+        if len(data) < 1000:
+            print(f"WARNING: Only {len(data)} rows of data. Need at least 1000 for proper optimization.")
+            print("Available timeframes with more data:")
+            print("- 1_90d (1-minute, 90 days)")
+            print("- 5_90d (5-minute, 90 days)")
+            print("- 15_90d (15-minute, 90 days)")
             
         # Limit to last 10000 candles for faster optimization
         return data.tail(10000).copy()
@@ -53,8 +79,15 @@ class BayesianBacktestOptimizer:
         delta = prices.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=length).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=length).mean()
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
+        
+        # Handle division by zero
+        rs = gain / (loss + 1e-10)  # Add small epsilon
+        rsi = 100 - (100 / (1 + rs))
+        
+        # Replace any remaining NaN/inf with 50 (neutral)
+        rsi = rsi.fillna(50).replace([np.inf, -np.inf], 50)
+        
+        return rsi
     
     def _calculate_mfi(self, data, length):
         """Calculate Money Flow Index"""
@@ -67,8 +100,14 @@ class BayesianBacktestOptimizer:
         pos_mf = positive_flow.rolling(window=length).sum()
         neg_mf = negative_flow.rolling(window=length).sum()
         
-        mfr = pos_mf / neg_mf
-        return 100 - (100 / (1 + mfr))
+        # Handle division by zero
+        mfr = pos_mf / (neg_mf + 1e-10)  # Add small epsilon to avoid division by zero
+        mfi = 100 - (100 / (1 + mfr))
+        
+        # Replace any remaining NaN/inf with 50 (neutral)
+        mfi = mfi.fillna(50).replace([np.inf, -np.inf], 50)
+        
+        return mfi
     
     def backtest(self, params, data):
         """Run backtest simulation"""
@@ -81,9 +120,21 @@ class BayesianBacktestOptimizer:
         rsi = self._calculate_rsi(data['close'], rsi_length)
         mfi = self._calculate_mfi(data, mfi_length)
         
+        # Debug: Check indicators (only on first run)
+        if self.debug_mode:
+            print(f"RSI range: {rsi.min():.2f} to {rsi.max():.2f}")
+            print(f"MFI range: {mfi.min():.2f} to {mfi.max():.2f}")
+            print(f"Oversold level: {oversold}, Overbought level: {overbought}")
+        
         # Generate signals
         buy_signal = (rsi < oversold) & (mfi < oversold)
         sell_signal = (rsi > overbought) | (mfi > overbought)
+        
+        # Debug: Check signals (only on first run)
+        if self.debug_mode:
+            print(f"Buy signals: {buy_signal.sum()}")
+            print(f"Sell signals: {sell_signal.sum()}")
+            self.debug_mode = False  # Turn off debug after first run
         
         # Backtest simulation
         position = 0
@@ -125,10 +176,6 @@ class BayesianBacktestOptimizer:
             # Update equity curve
             current_equity = balance + (position * current_price if position > 0 else 0)
             equity_curve.append(current_equity)
-            
-            # Progress indicator
-            if i % 1000 == 0:
-                print(f"Processed {i}/{len(data)} candles", end='\r')
         
         return trades, equity_curve
     
@@ -146,9 +193,20 @@ class BayesianBacktestOptimizer:
         equity_series = pd.Series(equity_curve)
         returns = equity_series.pct_change().dropna()
         
-        # Sharpe ratio (annualized for hourly data)
+        # Sharpe ratio (annualized - adjust based on timeframe)
+        if self.timeframe.startswith('1_'):  # 1-minute data
+            periods_per_year = 525600  # 365 * 24 * 60
+        elif self.timeframe.startswith('5_'):  # 5-minute data
+            periods_per_year = 105120  # 365 * 24 * 12
+        elif self.timeframe.startswith('15_'):  # 15-minute data
+            periods_per_year = 35040   # 365 * 24 * 4
+        elif self.timeframe.startswith('30_'):  # 30-minute data
+            periods_per_year = 17520   # 365 * 24 * 2
+        else:  # Default to hourly
+            periods_per_year = 8760    # 365 * 24
+            
         if returns.std() > 0:
-            sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(8760)  # 24*365 hours
+            sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(periods_per_year)
         else:
             sharpe_ratio = 0
         
@@ -250,12 +308,24 @@ class BayesianBacktestOptimizer:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"optimization_results_{self.symbol}_{self.timeframe}_{timestamp}.json"
         
+        # Convert numpy types to Python native types for JSON serialization
+        def convert_types(obj):
+            if isinstance(obj, dict):
+                return {k: convert_types(v) for k, v in obj.items()}
+            elif isinstance(obj, (np.integer, np.int64)):
+                return int(obj)
+            elif isinstance(obj, (np.floating, np.float64)):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return obj
+        
         results = {
             'symbol': self.symbol,
             'timeframe': self.timeframe,
             'timestamp': timestamp,
-            'best_params': params,
-            'metrics': metrics
+            'best_params': convert_types(params),
+            'metrics': convert_types(metrics)
         }
         
         with open(filename, 'w') as f:
@@ -313,7 +383,7 @@ if __name__ == "__main__":
     optimizer = BayesianBacktestOptimizer(
         h5_path="data/crypto_database.h5",
         symbol="SOLUSDT",
-        timeframe="1h"
+        timeframe="1_90d"  # 1-minute data, 90 days
     )
     
     # Run optimization
