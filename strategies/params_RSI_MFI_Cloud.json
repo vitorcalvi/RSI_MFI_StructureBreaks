@@ -1,0 +1,8 @@
+{
+  "rsi_length": 7,
+  "mfi_length": 7,
+  "oversold_level": 40,
+  "overbought_level": 60,
+  "require_volume": false,
+  "require_trend": false
+}
