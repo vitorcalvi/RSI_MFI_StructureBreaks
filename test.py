@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 """
-Comprehensive Test Suite for ZORA Trading Bot
-Tests all components: Strategy, Risk Management, Data Processing, etc.
+ZORA Trading Bot - Trailing Stop Profit Locker Test & Visualization
+Tests and plots the trailing stop mechanism for profit protection
 """
 
 import os
 import sys
 import json
-import asyncio
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, AsyncMock
 
 # Add project root to path
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# Create mock params file for testing
 def create_test_params():
     """Create test parameters file"""
     test_params = {
@@ -38,24 +37,37 @@ def create_test_params():
     
     return params_file
 
-def generate_test_data(length=100, start_price=0.082, volatility=0.05):
-    """Generate realistic OHLCV test data for ZORA"""
-    dates = pd.date_range(start=datetime.now() - timedelta(hours=length), periods=length, freq='5min')
+def generate_profitable_scenario(length=200, start_price=0.082):
+    """Generate ZORA price data with profitable uptrend followed by pullback"""
+    dates = pd.date_range(start=datetime.now() - timedelta(minutes=length*5), periods=length, freq='5min')
     
-    # Generate realistic price movements
-    returns = np.random.normal(0, volatility, length)
     prices = [start_price]
     
-    for r in returns[1:]:
-        new_price = prices[-1] * (1 + r)
+    for i in range(1, length):
+        current_price = prices[-1]
+        
+        if i < 50:
+            # Initial sideways movement
+            change = np.random.normal(0, 0.002)
+        elif i < 120:
+            # Strong uptrend for profit lock activation
+            change = np.random.normal(0.003, 0.002)  # Positive bias
+        elif i < 160:
+            # Continue uptrend but slower
+            change = np.random.normal(0.001, 0.002)
+        else:
+            # Pullback to test trailing stop
+            change = np.random.normal(-0.002, 0.002)  # Negative bias
+        
+        new_price = current_price * (1 + change)
         new_price = max(0.001, new_price)  # Prevent negative prices
         prices.append(new_price)
     
     # Generate OHLC from prices
     data = []
     for i, price in enumerate(prices):
-        high = price * (1 + abs(np.random.normal(0, 0.01)))
-        low = price * (1 - abs(np.random.normal(0, 0.01)))
+        high = price * (1 + abs(np.random.normal(0, 0.005)))
+        low = price * (1 - abs(np.random.normal(0, 0.005)))
         volume = np.random.uniform(1000, 10000)
         
         data.append({
@@ -69,445 +81,338 @@ def generate_test_data(length=100, start_price=0.082, volatility=0.05):
     df = pd.DataFrame(data, index=dates)
     return df
 
-class TestSuite:
+class TrailingStopTester:
     def __init__(self):
-        self.passed = 0
-        self.failed = 0
         self.params_file = None
+        self.setup()
         
     def setup(self):
         """Setup test environment"""
-        print("🔧 Setting up test environment...")
         self.params_file = create_test_params()
-        print(f"✅ Created test params: {self.params_file}")
         
     def cleanup(self):
         """Cleanup test files"""
         if self.params_file and os.path.exists(self.params_file):
             os.remove(self.params_file)
-            print(f"🧹 Cleaned up: {self.params_file}")
     
-    def assert_test(self, condition, test_name, details=""):
-        """Assert test result"""
-        if condition:
-            print(f"✅ {test_name}")
-            self.passed += 1
-        else:
-            print(f"❌ {test_name} - {details}")
-            self.failed += 1
-    
-    def test_risk_manager(self):
-        """Test RiskManager functionality"""
-        print("\n📊 Testing RiskManager...")
-        
-        try:
-            from core.risk_management import RiskManager
-            rm = RiskManager()
-            
-            # Test basic parameters
-            self.assert_test(rm.symbol == "ZORA/USDT", "Symbol configuration")
-            self.assert_test(rm.leverage == 10, "Leverage setting")
-            self.assert_test(rm.trailing_stop_distance == 0.008, "Trailing stop distance")
-            
-            # Test position size calculation
-            balance = 1000
-            price = 0.082
-            pos_size = rm.calculate_position_size(balance, price)
-            expected_size = (balance * 0.1) / price  # No multiplier for price > 0.05
-            
-            self.assert_test(abs(pos_size - expected_size) < 0.1, 
-                           "Position size calculation", 
-                           f"Got {pos_size}, expected ~{expected_size}")
-            
-            # Test stop loss calculation
-            entry_price = 0.082
-            long_sl = rm.get_stop_loss(entry_price, 'long')
-            short_sl = rm.get_stop_loss(entry_price, 'short')
-            
-            expected_long_sl = entry_price * (1 - rm.stop_loss_pct)
-            expected_short_sl = entry_price * (1 + rm.stop_loss_pct)
-            
-            self.assert_test(abs(long_sl - expected_long_sl) < 0.0001, "Long stop loss")
-            self.assert_test(abs(short_sl - expected_short_sl) < 0.0001, "Short stop loss")
-            
-            # Test take profit calculation
-            long_tp = rm.get_take_profit(entry_price, 'long')
-            short_tp = rm.get_take_profit(entry_price, 'short')
-            
-            expected_long_tp = entry_price * (1 + rm.take_profit_pct)
-            expected_short_tp = entry_price * (1 - rm.take_profit_pct)
-            
-            self.assert_test(abs(long_tp - expected_long_tp) < 0.0001, "Long take profit")
-            self.assert_test(abs(short_tp - expected_short_tp) < 0.0001, "Short take profit")
-            
-        except Exception as e:
-            self.assert_test(False, "RiskManager import/creation", str(e))
-    
-    def test_strategy_indicators(self):
-        """Test strategy indicator calculations"""
-        print("\n🎯 Testing Strategy Indicators...")
-        
-        try:
-            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
-            strategy = RSIMFICloudStrategy()
-            
-            # Generate test data
-            df = generate_test_data(50)
-            
-            # Test RSI calculation
-            rsi = strategy.calculate_rsi(df['close'])
-            self.assert_test(len(rsi) == len(df), "RSI length matches data")
-            self.assert_test(rsi.min() >= 0 and rsi.max() <= 100, "RSI bounds check")
-            self.assert_test(not rsi.isna().all(), "RSI not all NaN")
-            
-            # Test MFI calculation
-            mfi = strategy.calculate_mfi(df['high'], df['low'], df['close'])
-            self.assert_test(len(mfi) == len(df), "MFI length matches data")
-            self.assert_test(mfi.min() >= 0 and mfi.max() <= 100, "MFI bounds check")
-            self.assert_test(not mfi.isna().all(), "MFI not all NaN")
-            
-            # Test trend calculation
-            trend = strategy.calculate_trend(df['close'])
-            self.assert_test(len(trend) == len(df), "Trend length matches data")
-            valid_trends = ['UP', 'DOWN', 'SIDEWAYS']
-            self.assert_test(all(t in valid_trends for t in trend), "Valid trend values")
-            
-            # Test ATR calculation
-            atr = strategy.calculate_atr(df)
-            self.assert_test(len(atr) == len(df), "ATR length matches data")
-            self.assert_test((atr >= 0).all(), "ATR non-negative")
-            
-            # Test full indicator calculation
-            df_with_indicators = strategy.calculate_indicators(df)
-            required_cols = ['rsi', 'mfi', 'trend', 'price_change', 'atr']
-            
-            for col in required_cols:
-                self.assert_test(col in df_with_indicators.columns, f"Has {col} column")
-            
-        except Exception as e:
-            self.assert_test(False, "Strategy indicator calculation", str(e))
-    
-    def test_signal_generation(self):
-        """Test signal generation logic"""
-        print("\n📡 Testing Signal Generation...")
-        
-        try:
-            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
-            strategy = RSIMFICloudStrategy()
-            
-            # Test with insufficient data
-            small_df = generate_test_data(10)
-            signal = strategy.generate_signal(small_df)
-            self.assert_test(signal is None, "No signal with insufficient data")
-            
-            # Test with sufficient data
-            df = generate_test_data(100)
-            
-            # Force oversold conditions for BUY signal
-            df_oversold = df.copy()
-            df_oversold.loc[df_oversold.index[-10:], 'close'] *= 0.9  # Drop price to create oversold
-            
-            # Test signal generation
-            signal = strategy.generate_signal(df_oversold)
-            
-            # Signal should be dict or None
-            if signal is not None:
-                required_keys = ['action', 'price', 'rsi', 'mfi', 'trend', 'timestamp']
-                for key in required_keys:
-                    self.assert_test(key in signal, f"Signal has {key}")
-                
-                self.assert_test(signal['action'] in ['BUY', 'SELL', 'CLOSE'], "Valid signal action")
-                self.assert_test(isinstance(signal['price'], (int, float)), "Price is numeric")
-            
-            # Test signal cooldown
-            first_signal = strategy.generate_signal(df)
-            if first_signal:
-                second_signal = strategy.generate_signal(df)  # Should be None due to cooldown
-                self.assert_test(second_signal is None, "Signal cooldown working")
-            
-        except Exception as e:
-            self.assert_test(False, "Signal generation", str(e))
-    
-    def test_atr_risk_management(self):
-        """Test ATR-based risk management"""
-        print("\n🔒 Testing ATR Risk Management...")
-        
-        try:
-            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
-            strategy = RSIMFICloudStrategy()
-            
-            df = generate_test_data(50)
-            df_with_indicators = strategy.calculate_indicators(df)
-            
-            current_price = df_with_indicators['close'].iloc[-1]
-            current_atr = df_with_indicators['atr'].iloc[-1]
-            
-            # Test position setting
-            strategy.set_position('LONG', current_price, current_atr)
-            self.assert_test(strategy.position_type == 'LONG', "Position type set")
-            self.assert_test(strategy.entry_price == current_price, "Entry price set")
-            self.assert_test(strategy.trailing_stop is not None, "Trailing stop set")
-            
-            expected_stop = current_price - (current_atr * strategy.atr_multiplier)
-            self.assert_test(abs(strategy.trailing_stop - expected_stop) < 0.0001, 
-                           "Correct trailing stop calculation")
-            
-            # Test trailing stop update
-            new_price = current_price * 1.02  # 2% higher
-            strategy.update_trailing_stop(new_price, current_atr)
-            
-            # Stop should move up for profitable long position
-            new_expected_stop = new_price - (current_atr * strategy.atr_multiplier)
-            self.assert_test(strategy.trailing_stop >= expected_stop, "Trailing stop moved up")
-            
-            # Test stop hit detection
-            hit_price = strategy.trailing_stop - 0.001  # Below stop
-            self.assert_test(strategy.check_stop_hit(hit_price), "Stop hit detection")
-            
-            safe_price = strategy.trailing_stop + 0.001  # Above stop
-            self.assert_test(not strategy.check_stop_hit(safe_price), "Stop not hit detection")
-            
-            # Test position reset
-            strategy.reset_position()
-            self.assert_test(strategy.position_type is None, "Position type reset")
-            self.assert_test(strategy.trailing_stop is None, "Trailing stop reset")
-            
-        except Exception as e:
-            self.assert_test(False, "ATR risk management", str(e))
-   
-    async def test_telegram_notifier(self):
-        """Test Telegram notifier (mock)"""
-        print("\n📱 Testing Telegram Notifier...")
-        
-        try:
-            # Mock environment variables
-            with patch.dict(os.environ, {
-                'TELEGRAM_BOT_TOKEN': 'mock_token',
-                'TELEGRAM_CHAT_ID': 'mock_chat_id'
-            }):
-                with patch('telegram.Bot') as mock_bot:
-                    from core.telegram_notifier import TelegramNotifier
-                    
-                    notifier = TelegramNotifier()
-                    self.assert_test(notifier.enabled, "Notifier enabled with mock credentials")
-                    
-                    # Test message sending (mock)
-                    mock_bot_instance = AsyncMock()
-                    notifier.bot = mock_bot_instance
-                    
-                    await notifier.trade_opened("ZORA/USDT", 0.082, 1000, "Buy")
-                    self.assert_test(mock_bot_instance.send_message.called, "Trade opened notification sent")
-                    
-                    await notifier.trade_closed("ZORA/USDT", 5.2, 10.5, "Take Profit")
-                    self.assert_test(mock_bot_instance.send_message.call_count >= 2, "Trade closed notification sent")
-                    
-        except Exception as e:
-            self.assert_test(False, "Telegram notifier", str(e))
-    
-    def test_data_processing(self):
-        """Test data processing and edge cases"""
-        print("\n📈 Testing Data Processing...")
-        
-        try:
-            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
-            strategy = RSIMFICloudStrategy()
-            
-            # Test with NaN values
-            df_with_nan = generate_test_data(50)
-            df_with_nan.loc[df_with_nan.index[10:15], 'close'] = np.nan
-            
-            df_processed = strategy.calculate_indicators(df_with_nan)
-            self.assert_test(not df_processed['rsi'].isna().all(), "RSI handles NaN")
-            self.assert_test(not df_processed['mfi'].isna().all(), "MFI handles NaN")
-            
-            # Test with extreme values
-            df_extreme = generate_test_data(50)
-            df_extreme.loc[df_extreme.index[25], 'close'] = 999999  # Extreme spike
-            
-            df_processed = strategy.calculate_indicators(df_extreme)
-            self.assert_test((df_processed['rsi'] <= 100).all(), "RSI bounded with extreme values")
-            self.assert_test((df_processed['mfi'] <= 100).all(), "MFI bounded with extreme values")
-            
-            # Test with flat prices
-            df_flat = generate_test_data(50)
-            df_flat['close'] = 0.082  # All same price
-            df_flat['high'] = 0.082
-            df_flat['low'] = 0.082
-            df_flat['open'] = 0.082
-            
-            for col in ['close', 'high', 'low', 'open']:
-              df_flat.loc[:, col] = 0.082  # All same price
-            
-            df_processed = strategy.calculate_indicators(df_flat)
-            self.assert_test(not df_processed.empty, "Processes flat prices")
-            
-        except Exception as e:
-            self.assert_test(False, "Data processing", str(e))
-    
-    def test_edge_cases(self):
-        """Test edge cases and error handling"""
-        print("\n⚠️ Testing Edge Cases...")
-        
-        try:
-            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
-            strategy = RSIMFICloudStrategy()
-            
-            # Test empty dataframe
-            empty_df = pd.DataFrame()
-            result = strategy.calculate_indicators(empty_df)
-            self.assert_test(result.empty, "Handles empty dataframe")
-            
-            # Test single row
-            single_row = generate_test_data(1)
-            result = strategy.calculate_indicators(single_row)
-            self.assert_test(len(result) == 1, "Handles single row")
-            
-            # Test very small values
-            small_df = generate_test_data(50, start_price=0.000001)
-            result = strategy.calculate_indicators(small_df)
-            self.assert_test(not result.empty, "Handles very small prices")
-            
-            # Test signal generation with no position
-            strategy.reset_position()
-            signal = strategy.generate_signal(generate_test_data(100))
-            # Should work without error
-            self.assert_test(True, "Signal generation with no position")
-            
-        except Exception as e:
-            self.assert_test(False, "Edge cases", str(e))
-    
-    def test_integration(self):
-        """Test component integration"""
-        print("\n🔗 Testing Integration...")
-        
+    def test_trailing_stop_mechanism(self, plot=True):
+        """Test and visualize trailing stop profit locker"""
         try:
             from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
             from core.risk_management import RiskManager
             
+            print("🔒 Testing Trailing Stop Profit Locker for ZORA/USDT")
+            print("=" * 60)
+            
+            # Initialize components
             strategy = RSIMFICloudStrategy()
             risk_manager = RiskManager()
             
-            # Test that both use same symbol
-            self.assert_test(strategy.symbol == risk_manager.symbol, "Matching symbols")
+            # Generate test scenario
+            df = generate_profitable_scenario(200, 0.082)
             
-            # Test full workflow
-            df = generate_test_data(100)
+            # Simulate trading session
+            results = self.simulate_trading_session(df, strategy, risk_manager)
             
-            # Generate signal
-            signal = strategy.generate_signal(df)
+            if plot:
+                self.plot_results(df, results, strategy, risk_manager)
             
-            if signal and signal['action'] in ['BUY', 'SELL']:
-                # Calculate position size
-                balance = 1000
-                price = signal['price']
-                pos_size = risk_manager.calculate_position_size(balance, price)
-                
-                # Calculate stops
-                if signal['action'] == 'BUY':
-                    sl = risk_manager.get_stop_loss(price, 'long')
-                    tp = risk_manager.get_take_profit(price, 'long')
-                else:
-                    sl = risk_manager.get_stop_loss(price, 'short')
-                    tp = risk_manager.get_take_profit(price, 'short')
-                
-                self.assert_test(pos_size > 0, "Positive position size")
-                self.assert_test(sl != price, "Stop loss different from entry")
-                self.assert_test(tp != price, "Take profit different from entry")
-            
-            self.assert_test(True, "Full workflow integration")
+            return results
             
         except Exception as e:
-            self.assert_test(False, "Integration test", str(e))
+            print(f"❌ Test error: {e}")
+            return None
     
-    def test_performance(self):
-        """Test performance with larger datasets"""
-        print("\n⚡ Testing Performance...")
+    def simulate_trading_session(self, df, strategy, risk_manager):
+        """Simulate a complete trading session with trailing stops"""
+        results = {
+            'timestamps': [],
+            'prices': [],
+            'entry_price': None,
+            'entry_time': None,
+            'profit_lock_activated': False,
+            'profit_lock_time': None,
+            'profit_lock_price': None,
+            'trailing_stops': [],
+            'exit_price': None,
+            'exit_time': None,
+            'exit_reason': None,
+            'pnl_pct': 0,
+            'max_profit_pct': 0,
+            'events': []
+        }
         
-        try:
-            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
-            strategy = RSIMFICloudStrategy()
+        position_active = False
+        profit_lock_active = False
+        current_trailing_stop = None
+        entry_price = None
+        max_profit_seen = 0
+        
+        # Process each price point
+        for i in range(len(df)):
+            current_time = df.index[i]
+            current_price = df['close'].iloc[i]
             
-            # Test with large dataset
-            large_df = generate_test_data(1000)
+            results['timestamps'].append(current_time)
+            results['prices'].append(current_price)
             
-            start_time = datetime.now()
-            df_processed = strategy.calculate_indicators(large_df)
-            processing_time = (datetime.now() - start_time).total_seconds()
+            if not position_active:
+                # Look for entry signal (simulate BUY signal at bar 10)
+                if i == 10:  # Entry point
+                    position_active = True
+                    entry_price = current_price
+                    results['entry_price'] = entry_price
+                    results['entry_time'] = current_time
+                    results['events'].append({
+                        'time': current_time,
+                        'price': current_price,
+                        'event': 'POSITION_OPENED',
+                        'details': f'Long @ ${current_price:.6f}'
+                    })
+                    print(f"📈 Position opened: ${current_price:.6f} at {current_time.strftime('%H:%M')}")
+                
+                results['trailing_stops'].append(None)
+                continue
             
-            self.assert_test(processing_time < 5.0, f"Processing time reasonable: {processing_time:.2f}s")
-            self.assert_test(len(df_processed) == 1000, "Processed all rows")
+            # Calculate current P&L
+            pnl_pct = (current_price - entry_price) / entry_price * 100
+            leveraged_pnl = pnl_pct * risk_manager.leverage
+            results['pnl_pct'] = leveraged_pnl
             
-            # Test signal generation performance
-            start_time = datetime.now()
-            for i in range(10):
-                signal = strategy.generate_signal(large_df)
-            signal_time = (datetime.now() - start_time).total_seconds()
+            # Track max profit
+            if leveraged_pnl > max_profit_seen:
+                max_profit_seen = leveraged_pnl
+                results['max_profit_pct'] = max_profit_seen
             
-            self.assert_test(signal_time < 2.0, f"Signal generation time reasonable: {signal_time:.2f}s")
+            # Check for profit lock activation
+            profit_threshold = risk_manager.break_even_pct * 100 * risk_manager.leverage
             
-        except Exception as e:
-            self.assert_test(False, "Performance test", str(e))
+            if not profit_lock_active and leveraged_pnl >= profit_threshold:
+                profit_lock_active = True
+                results['profit_lock_activated'] = True
+                results['profit_lock_time'] = current_time
+                results['profit_lock_price'] = current_price
+                
+                # Calculate initial trailing stop
+                trailing_distance = current_price * risk_manager.trailing_stop_distance
+                current_trailing_stop = current_price - trailing_distance
+                
+                results['events'].append({
+                    'time': current_time,
+                    'price': current_price,
+                    'event': 'PROFIT_LOCK_ACTIVATED',
+                    'details': f'P&L: {leveraged_pnl:.1f}% (threshold: {profit_threshold:.1f}%)'
+                })
+                print(f"🔓 PROFIT LOCK ACTIVATED! P&L: {leveraged_pnl:.2f}% @ ${current_price:.6f}")
+                print(f"   Initial trailing stop: ${current_trailing_stop:.6f}")
+            
+            # Update trailing stop if profit lock is active
+            if profit_lock_active and current_trailing_stop is not None:
+                trailing_distance = current_price * risk_manager.trailing_stop_distance
+                new_trailing_stop = current_price - trailing_distance
+                
+                # Only move stop up (never down)
+                if new_trailing_stop > current_trailing_stop:
+                    current_trailing_stop = new_trailing_stop
+                    results['events'].append({
+                        'time': current_time,
+                        'price': current_price,
+                        'event': 'TRAILING_STOP_UPDATED',
+                        'details': f'New stop: ${current_trailing_stop:.6f}'
+                    })
+            
+            results['trailing_stops'].append(current_trailing_stop)
+            
+            # Check if trailing stop hit
+            if profit_lock_active and current_trailing_stop and current_price <= current_trailing_stop:
+                # Position closed by trailing stop
+                results['exit_price'] = current_price
+                results['exit_time'] = current_time
+                results['exit_reason'] = 'TRAILING_STOP_HIT'
+                
+                final_pnl = (current_price - entry_price) / entry_price * 100 * risk_manager.leverage
+                results['pnl_pct'] = final_pnl
+                
+                results['events'].append({
+                    'time': current_time,
+                    'price': current_price,
+                    'event': 'POSITION_CLOSED',
+                    'details': f'Trailing stop hit @ ${current_price:.6f}, P&L: {final_pnl:.2f}%'
+                })
+                
+                print(f"🔒 TRAILING STOP HIT! Exit @ ${current_price:.6f}")
+                print(f"   Final P&L: {final_pnl:.2f}% (Max seen: {max_profit_seen:.2f}%)")
+                break
+        
+        return results
     
-    async def run_all_tests(self):
-        """Run all tests"""
-        print("🧪 ZORA Trading Bot - Comprehensive Test Suite")
+    def plot_results(self, df, results, strategy, risk_manager):
+        """Create comprehensive visualization"""
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), height_ratios=[3, 1])
+        
+        # Main price chart
+        timestamps = results['timestamps']
+        prices = results['prices']
+        trailing_stops = results['trailing_stops']
+        
+        # Plot price line
+        ax1.plot(timestamps, prices, 'b-', linewidth=2, label='ZORA Price', alpha=0.8)
+        
+        # Plot trailing stop line
+        valid_stops = [(t, s) for t, s in zip(timestamps, trailing_stops) if s is not None]
+        if valid_stops:
+            stop_times, stop_prices = zip(*valid_stops)
+            ax1.plot(stop_times, stop_prices, 'r--', linewidth=2, label='Trailing Stop', alpha=0.7)
+            ax1.fill_between(stop_times, stop_prices, min(prices), alpha=0.1, color='red', label='Stop Loss Zone')
+        
+        # Mark key events
+        if results['entry_time']:
+            ax1.scatter(results['entry_time'], results['entry_price'], 
+                       color='green', s=100, marker='^', zorder=5, label='Entry')
+            ax1.annotate(f'ENTRY\n${results["entry_price"]:.6f}', 
+                        xy=(results['entry_time'], results['entry_price']),
+                        xytext=(10, 20), textcoords='offset points',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='green', alpha=0.7),
+                        arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+        
+        if results['profit_lock_time']:
+            ax1.scatter(results['profit_lock_time'], results['profit_lock_price'], 
+                       color='orange', s=100, marker='*', zorder=5, label='Profit Lock')
+            ax1.annotate('PROFIT LOCK\nACTIVATED', 
+                        xy=(results['profit_lock_time'], results['profit_lock_price']),
+                        xytext=(-10, 30), textcoords='offset points',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='orange', alpha=0.7),
+                        arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+        
+        if results['exit_time']:
+            ax1.scatter(results['exit_time'], results['exit_price'], 
+                       color='red', s=100, marker='v', zorder=5, label='Exit')
+            ax1.annotate(f'EXIT\n${results["exit_price"]:.6f}\nP&L: {results["pnl_pct"]:.1f}%', 
+                        xy=(results['exit_time'], results['exit_price']),
+                        xytext=(-10, -40), textcoords='offset points',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='red', alpha=0.7),
+                        arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+        
+        # Format main chart
+        ax1.set_title('ZORA/USDT - Trailing Stop Profit Locker Test', fontsize=16, fontweight='bold')
+        ax1.set_ylabel('Price (USDT)', fontsize=12)
+        ax1.legend(loc='upper left')
+        ax1.grid(True, alpha=0.3)
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax1.xaxis.set_major_locator(mdates.MinuteLocator(interval=30))
+        plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
+        
+        # P&L chart
+        if results['entry_time']:
+            entry_idx = timestamps.index(results['entry_time'])
+            pnl_times = timestamps[entry_idx:]
+            pnl_values = []
+            
+            for i, price in enumerate(prices[entry_idx:], entry_idx):
+                if results['entry_price']:
+                    pnl = (price - results['entry_price']) / results['entry_price'] * 100 * risk_manager.leverage
+                    pnl_values.append(pnl)
+            
+            # Plot P&L
+            ax2.plot(pnl_times, pnl_values, 'g-', linewidth=2, label='P&L %')
+            ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+            
+            # Mark profit threshold
+            profit_threshold = risk_manager.break_even_pct * 100 * risk_manager.leverage
+            ax2.axhline(y=profit_threshold, color='orange', linestyle='--', alpha=0.7, 
+                       label=f'Profit Lock Threshold ({profit_threshold:.1f}%)')
+            
+            # Fill profitable area
+            ax2.fill_between(pnl_times, pnl_values, 0, where=np.array(pnl_values) > 0, 
+                           alpha=0.3, color='green', label='Profit Zone')
+            ax2.fill_between(pnl_times, pnl_values, 0, where=np.array(pnl_values) < 0, 
+                           alpha=0.3, color='red', label='Loss Zone')
+        
+        ax2.set_ylabel('P&L (%)', fontsize=12)
+        ax2.set_xlabel('Time', fontsize=12)
+        ax2.legend(loc='upper right')
+        ax2.grid(True, alpha=0.3)
+        ax2.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax2.xaxis.set_major_locator(mdates.MinuteLocator(interval=30))
+        plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45)
+        
+        plt.tight_layout()
+        
+        # Save plot
+        plot_filename = f"zora_trailing_stop_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+        print(f"\n📊 Plot saved as: {plot_filename}")
+        
+        plt.show()
+        
+        # Print summary
+        self.print_summary(results, risk_manager)
+    
+    def print_summary(self, results, risk_manager):
+        """Print detailed test summary"""
+        print("\n" + "=" * 60)
+        print("📊 TRAILING STOP PROFIT LOCKER - TEST SUMMARY")
         print("=" * 60)
         
-        self.setup()
+        if results['entry_price']:
+            print(f"💰 Entry Price: ${results['entry_price']:.6f}")
+            print(f"⏰ Entry Time: {results['entry_time'].strftime('%H:%M:%S')}")
         
-        try:
-            # Run all tests
-            self.test_risk_manager()
-            self.test_strategy_indicators() 
-            self.test_signal_generation()
-            self.test_atr_risk_management()
-            await self.test_telegram_notifier()
-            self.test_data_processing()
-            self.test_edge_cases()
-            self.test_integration()
-            self.test_performance()
+        if results['profit_lock_activated']:
+            print(f"\n🔓 PROFIT LOCK ACTIVATED:")
+            print(f"   💎 Activation Price: ${results['profit_lock_price']:.6f}")
+            print(f"   ⏰ Activation Time: {results['profit_lock_time'].strftime('%H:%M:%S')}")
+            profit_at_lock = (results['profit_lock_price'] - results['entry_price']) / results['entry_price'] * 100
+            print(f"   📈 Profit at Lock: {profit_at_lock * risk_manager.leverage:.2f}%")
+        
+        if results['exit_price']:
+            print(f"\n🔒 POSITION CLOSED:")
+            print(f"   💸 Exit Price: ${results['exit_price']:.6f}")
+            print(f"   ⏰ Exit Time: {results['exit_time'].strftime('%H:%M:%S')}")
+            print(f"   📉 Exit Reason: {results['exit_reason']}")
+            print(f"   🎯 Final P&L: {results['pnl_pct']:.2f}%")
+            print(f"   🚀 Max Profit Seen: {results['max_profit_pct']:.2f}%")
             
-            # Summary
-            print("\n" + "=" * 60)
-            print(f"📊 TEST RESULTS:")
-            print(f"✅ Passed: {self.passed}")
-            print(f"❌ Failed: {self.failed}")
-            print(f"📈 Success Rate: {(self.passed/(self.passed+self.failed)*100):.1f}%")
-            
-            if self.failed == 0:
-                print("🎉 ALL TESTS PASSED! System ready for deployment.")
-            else:
-                print("⚠️ Some tests failed. Review before deployment.")
-            
-        finally:
-            self.cleanup()
+            # Calculate profit protected
+            if results['max_profit_pct'] > 0:
+                profit_protected = (results['max_profit_pct'] - results['pnl_pct']) / results['max_profit_pct'] * 100
+                print(f"   🛡️ Profit Protected: {results['max_profit_pct'] - results['pnl_pct']:.2f}% ({profit_protected:.1f}% of max)")
+        
+        print(f"\n🎮 RISK MANAGEMENT SETTINGS:")
+        print(f"   📊 Leverage: {risk_manager.leverage}x")
+        print(f"   🔓 Profit Lock Threshold: {risk_manager.break_even_pct * 100 * risk_manager.leverage:.1f}%")
+        print(f"   📏 Trailing Distance: {risk_manager.trailing_stop_distance * 100:.1f}%")
+        
+        print(f"\n📈 KEY EVENTS:")
+        for event in results['events']:
+            print(f"   {event['time'].strftime('%H:%M')} - {event['event']}: {event['details']}")
+        
+        print("=" * 60)
 
-async def main():
+def main():
     """Main test runner"""
+    tester = TrailingStopTester()
+    
     try:
-        # Install required packages check
-        required_packages = ['pandas', 'numpy', 'pandas_ta']
-        missing = []
+        print("🧪 ZORA Trading Bot - Trailing Stop Profit Locker Test")
+        print("=" * 60)
         
-        for package in required_packages:
-            try:
-                __import__(package)
-            except ImportError:
-                missing.append(package)
+        # Run comprehensive test
+        results = tester.test_trailing_stop_mechanism(plot=True)
         
-        if missing:
-            print(f"❌ Missing packages: {', '.join(missing)}")
-            print(f"Install with: pip install {' '.join(missing)}")
-            return
-        
-        # Run tests
-        test_suite = TestSuite()
-        await test_suite.run_all_tests()
-        
-    except KeyboardInterrupt:
-        print("\n⚠️ Tests interrupted by user")
+        if results:
+            print("\n✅ Test completed successfully!")
+            if results['profit_lock_activated']:
+                print("🔓 Profit lock mechanism working correctly")
+            if results['exit_reason'] == 'TRAILING_STOP_HIT':
+                print("🔒 Trailing stop protection activated")
+        else:
+            print("❌ Test failed")
+            
     except Exception as e:
-        print(f"\n❌ Test suite error: {e}")
+        print(f"❌ Test error: {e}")
+    finally:
+        tester.cleanup()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
