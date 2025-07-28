@@ -20,87 +20,112 @@ class TelegramNotifier:
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.enabled = bool(self.bot_token and self.chat_id)
         self.position_start_time = None
-        
         if self.enabled:
             self.bot = Bot(token=self.bot_token)
     
     async def send_message(self, message):
-        """Send message to Telegram"""
         if not self.enabled:
             return
-            
         try:
             await self.bot.send_message(chat_id=self.chat_id, text=message)
         except Exception as e:
             print(f"Telegram error: {e}")
     
-    async def trade_opened(self, symbol, price, size):
-        """Notify when trade is opened"""
+    async def trade_opened(self, symbol, price, size, side, potential_gain=None, potential_loss=None):
         self.position_start_time = datetime.now()
         position_value = size * price
         
+        # Position direction emoji
+        direction_emoji = "📈" if side == "Buy" else "📉"
+        
         message = (
-            f"🔔 OPENED {symbol}\n"
+            f"🔔 {direction_emoji} OPENED {symbol}\n"
+            f"📍 Direction: {side.upper()}\n"
             f"⏰ {self.position_start_time.strftime('%H:%M:%S')}\n"
-            f"Price: ${price:.4f}\n"
-            f"Size: {size}\n"
-            f"Value: ${position_value:.2f}"
+            f"💰 Price: ${price:.4f}\n"
+            f"📊 Size: {size}\n"
+            f"💵 Value: ${position_value:.2f} USDT"
         )
         
+        if potential_gain is not None:
+            message += f"\n🎯 Target Profit: ${potential_gain:.2f}"
+        if potential_loss is not None:
+            message += f"\n🛡️ Max Loss: ${potential_loss:.2f}"
+            
         await self.send_message(message)
     
-    async def trade_closed(self, symbol, pnl_pct, pnl_usd):
-        """Notify when trade is closed"""
+    async def trade_closed(self, symbol, pnl_pct, pnl_usd, reason="Signal"):
         close_time = datetime.now()
-        profit = pnl_pct > 0
-        
-        # Calculate duration
         duration_str = "N/A"
         earn_per_hour = 0
         
         if self.position_start_time:
-            duration = close_time - self.position_start_time
-            total_minutes = duration.total_seconds() / 60
-            
-            if total_minutes < 60:
-                duration_str = f"{int(total_minutes)}m"
-            else:
-                hours = int(total_minutes // 60)
-                minutes = int(total_minutes % 60)
-                duration_str = f"{hours}h {minutes}m"
-            
-            # Calculate earn/loss per hour
+            total_minutes = (close_time - self.position_start_time).total_seconds() / 60
+            duration_str = f"{int(total_minutes)}m" if total_minutes < 60 else f"{int(total_minutes // 60)}h {int(total_minutes % 60)}m"
             if total_minutes > 0:
                 earn_per_hour = (pnl_usd * 60) / total_minutes
         
+        # Profit/Loss status
+        is_profit = pnl_pct > 0
+        status_emoji = "✅ 💰" if is_profit else "❌ 📉"
+        profit_status = "PROFIT" if is_profit else "LOSS"
+        
+        # Reason icons
+        reason_icons = {
+            "Signal": "🎯",
+            "Reverse Signal": "🔄", 
+            "Loss Limit": "🚨",
+            "Bot Stop": "⏹️",
+            "Take Profit": "💰",
+            "Stop Loss": "🛡️",
+            "Trailing Stop": "🔒"
+        }
+        
+        icon = reason_icons.get(reason, "📝")
+        
         message = (
-            f"{'✅' if profit else '❌'} CLOSED {symbol}\n"
-            f"⏰ {close_time.strftime('%H:%M:%S')}\n"
+            f"{status_emoji} CLOSED {symbol} - {profit_status}\n"
+            f"{icon} Reason: {reason}\n"
+            f"⏰ Closed: {close_time.strftime('%H:%M:%S')}\n"
             f"⏱️ Duration: {duration_str}\n"
-            f"📈 {pnl_pct:+.2f}%\n"
-            f"💵 ${pnl_usd:+.2f}\n"
-            f"📊 ${earn_per_hour:+.2f}/hour"
+            f"📈 P&L: {pnl_pct:+.2f}%\n"
+            f"💵 Amount: ${pnl_usd:+.2f} USDT\n"
+            f"📊 Rate: ${earn_per_hour:+.2f}/hour"
         )
         await self.send_message(message)
     
     async def profit_lock_activated(self, symbol, pnl_pct, trailing_pct):
-        """Notify when profit lock is activated"""
         message = (
-            f"🔒 PROFIT LOCK ACTIVATED!\n"
-            f"Symbol: {symbol}\n"
-            f"P&L: {pnl_pct:.2f}%\n"
-            f"Trailing Stop: {trailing_pct}%\n"
+            f"🔒 💎 PROFIT LOCK ACTIVATED!\n"
+            f"📊 Symbol: {symbol}\n"
+            f"📈 Current P&L: +{pnl_pct:.2f}%\n"
+            f"🎯 Trailing Stop: {trailing_pct}%\n"
+            f"💰 Protecting Profits Now!\n"
             f"⏰ {datetime.now().strftime('%H:%M:%S')}"
         )
         await self.send_message(message)
     
-    async def trailing_stop_updated(self, symbol, new_stop, current_price):
-        """Notify when trailing stop is updated"""
+    async def position_switched(self, symbol, from_side, to_side, size, pnl_pct, pnl_usd):
+        """Notify when position is switched due to losses"""
+        switch_time = datetime.now()
+        
         message = (
-            f"🔄 TRAILING STOP UPDATED\n"
-            f"Symbol: {symbol}\n"
-            f"New Stop: ${new_stop:.4f}\n"
-            f"Current: ${current_price:.4f}\n"
+            f"🔄 ⚡ POSITION SWITCHED!\n"
+            f"📊 Symbol: {symbol}\n"
+            f"🔀 From: {from_side} → {to_side}\n"
+            f"📈 Size: {size}\n"
+            f"📉 Loss Cut: {pnl_pct:.2f}% (${pnl_usd:.2f})\n"
+            f"🎯 New Direction: {to_side.upper()}\n"
+            f"⏰ {switch_time.strftime('%H:%M:%S')}"
+        )
+        await self.send_message(message)
+    
+    async def trailing_stop_updated(self, symbol, new_stop, current_price):
+        message = (
+            f"🔄 🔒 TRAILING UPDATED\n"
+            f"📊 {symbol}\n"
+            f"🎯 New Stop: ${new_stop:.4f}\n"
+            f"💰 Current: ${current_price:.4f}\n"
             f"⏰ {datetime.now().strftime('%H:%M:%S')}"
         )
         await self.send_message(message)
@@ -133,10 +158,13 @@ class TradeEngine:
         self.position = None
         self.last_signal_time = None
         
-        # Profit Locker
-        self.break_even_pct = 0.11  # 0.11% break-even threshold
+        # Profit Locker - Fixed minimum threshold
+        self.break_even_pct = 0.5  # 0.5% minimum for Bybit trailing stop
         self.profit_lock_active = False
-        self.trailing_stop_distance = 0.5  # 0.5% trailing stop distance
+        self.trailing_stop_distance = 1.0  # 1.0% trailing stop distance (minimum for Bybit)
+        
+        # Position switching for losses
+        self.loss_switch_threshold = -1.0  # Switch position at -2% loss
         
     def connect(self):
         """Initialize exchange connection"""
@@ -206,23 +234,38 @@ class TradeEngine:
             return 0
     
     def check_position(self):
-        """Check current position"""
+        """Check current position - Fixed to handle closed positions"""
         try:
             pos_resp = self.exchange.get_positions(category="linear", symbol=self.linear)
             if pos_resp.get('retCode') == 0 and pos_resp['result']['list']:
                 position = pos_resp['result']['list'][0]
-                if float(position['size']) > 0:
+                position_size = float(position['size'])
+                
+                # Check if position exists and has size > 0
+                if position_size > 0:
                     self.position = {
                         'side': position['side'],
-                        'size': float(position['size']),
+                        'size': position_size,
                         'avg_price': float(position['avgPrice']),
                         'unrealized_pnl': float(position['unrealisedPnl']),
-                        'unrealized_pnl_pct': float(position['unrealisedPnl']) / (float(position['avgPrice']) * float(position['size'])) * 100
+                        'unrealized_pnl_pct': float(position['unrealisedPnl']) / (float(position['avgPrice']) * position_size) * 100
                     }
                     return self.position
+                else:
+                    # Position was closed
+                    if self.position is not None:
+                        print(f"\n📉 Position closed by system")
+                    self.position = None
+                    self.profit_lock_active = False
+                    return None
+            
+            # No position data
+            if self.position is not None:
+                print(f"\n📉 Position closed")
             self.position = None
-            self.profit_lock_active = False  # Reset profit lock when no position
+            self.profit_lock_active = False
             return None
+            
         except Exception as e:
             print(f"❌ Position check error: {e}")
             return None
@@ -263,97 +306,119 @@ class TradeEngine:
         tick_str = f"{tick:.20f}".rstrip('0').rstrip('.')
         decimals = len(tick_str.split('.')[1]) if '.' in tick_str else 0
         return f"{price:.{decimals}f}"
-    
-    def calculate_trailing_stop(self, current_price):
-        """Calculate trailing stop loss price"""
-        if not self.position:
-            return None
-            
-        side = self.position['side']
-        distance_pct = self.trailing_stop_distance / 100
-        
-        if side == 'Buy':
-            # Long position: trailing stop below current price
-            trailing_stop = current_price * (1 - distance_pct)
-        else:
-            # Short position: trailing stop above current price
-            trailing_stop = current_price * (1 + distance_pct)
-            
-        return trailing_stop
 
+    async def switch_position_mode(self):
+        """Switch position using Bybit's position mode API"""
+        try:
+            if not self.position:
+                return False
+                
+            current_side = self.position['side']
+            size = self.position['size']
+            
+            # Determine new side
+            new_side = "Sell" if current_side == "Buy" else "Buy"
+            
+            print(f"\n🔄 Switching position: {current_side} -> {new_side}")
+            
+            # Use Bybit's position switch API
+            switch_resp = self.exchange.switch_position_mode(
+                category="linear",
+                symbol=self.linear,
+                coin="USDT",
+                mode=1  # Switch to opposite side
+            )
+            
+            if switch_resp.get('retCode') == 0:
+                print(f"✅ Position switched successfully")
+                
+                # Wait for position update
+                await asyncio.sleep(2)
+                
+                return True
+            else:
+                print(f"❌ Position switch failed: {switch_resp.get('retMsg')}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Position switch error: {e}")
+            return False
+
+    async def check_loss_switch(self):
+        """Check if we should switch position due to losses"""
+        if not self.position or self.profit_lock_active:
+            return
+            
+        pnl_pct = self.position['unrealized_pnl_pct']
+        
+        # Check if loss threshold is reached
+        if pnl_pct <= self.loss_switch_threshold:
+            print(f"\n⚠️ Loss threshold reached: {pnl_pct:.2f}%")
+            
+            current_side = self.position['side']
+            size = self.position['size']
+            
+            # Try to switch position
+            switch_success = await self.switch_position_mode()
+            
+            if not switch_success:
+                # Fallback: close position if switch fails
+                print("🚨 Switch failed, closing position")
+                await self.close_position("Loss Limit")
+            else:
+                # Notify about successful switch
+                await self.notifier.position_switched(
+                    self.symbol,
+                    current_side,
+                    "Sell" if current_side == "Buy" else "Buy", 
+                    size,
+                    pnl_pct,
+                    self.position.get('unrealized_pnl', 0)
+                )
 
 
     async def update_trailing_stop(self, current_price):
-        """Update trailing stop loss - FIXED VERSION"""
+        """Update trailing stop loss - FIXED for Bybit 10% minimum requirement"""
         try:
             if not self.position or not self.profit_lock_active:
                 return False
                 
             side = self.position['side']
-            avg_price = self.position['avg_price']
             
-            # Skip if current price equals average price (no movement)
-            if abs(current_price - avg_price) < 0.01:
-                return False
-            
-            # Calculate trailing stop distance (absolute price, not percentage)
-            distance_pct = self.trailing_stop_distance / 100
+            # FIXED: Bybit requires minimum 10% trailing distance
+            distance_pct = 0.10  # 10% minimum trailing distance
             
             if side == 'Buy':
-                # For Buy positions: trailing stop below current price
-                trailing_stop_price = current_price - (current_price * distance_pct)
-                
-                # Validation: trailing stop must be below current price AND below average price
-                if trailing_stop_price >= current_price or trailing_stop_price >= avg_price:
-                    return False
-                    
-                # Active price must be significantly above average price for API validation
-                active_price = max(current_price, avg_price * 1.02)  # 2% above average
-                
+                # For long: trailing stop below current price
+                trailing_stop_price = current_price * (1 - distance_pct)
+                active_price = current_price * 1.001  # Just above current
             else:
-                # For Sell positions: trailing stop above current price  
-                trailing_stop_price = current_price + (current_price * distance_pct)
-                
-                # Validation: trailing stop must be above current price AND above average price
-                if trailing_stop_price <= current_price or trailing_stop_price <= avg_price:
-                    return False
-                    
-                # Active price must be significantly below average price for API validation
-                active_price = min(current_price, avg_price * 0.98)  # 2% below average
+                # For short: trailing stop above current price  
+                trailing_stop_price = current_price * (1 + distance_pct)
+                active_price = current_price * 0.999  # Just below current
             
             info = self.get_symbol_info()
             if not info:
                 return False
                 
-            # Format prices with proper precision
             formatted_trailing_stop = self.format_price(info, trailing_stop_price)
             formatted_active_price = self.format_price(info, active_price)
             
-            # Additional validation - ensure 10% minimum difference for Bybit API
-            price_diff_pct = abs(float(formatted_trailing_stop) - avg_price) / avg_price * 100
-            if price_diff_pct < 0.1:  # Less than 0.1% difference
-                return False
-            
-            # Use correct Bybit API parameters for trailing stop
-            trailing_params = {
-                "category": "linear",
-                "symbol": self.linear,
-                "positionIdx": 0,
-                "trailingStop": formatted_trailing_stop,
-                "activePrice": formatted_active_price
-            }
-            
-            # Only update if there's meaningful price movement
-            resp = self.exchange.set_trading_stop(**trailing_params)
+            # Update trailing stop
+            resp = self.exchange.set_trading_stop(
+                category="linear",
+                symbol=self.linear,
+                positionIdx=0,
+                trailingStop=formatted_trailing_stop,
+                activePrice=formatted_active_price
+            )
             
             if resp.get('retCode') == 0:
                 return True
             else:
-                # Silently fail for validation errors to avoid spam
                 return False
                 
         except Exception as e:
-            # Silent fail to avoid error spam
             return False
 
     async def check_profit_lock(self, current_price):
@@ -372,7 +437,7 @@ class TradeEngine:
             await self.notifier.profit_lock_activated(
                 self.symbol, 
                 pnl_pct, 
-                self.trailing_stop_distance
+                10.0  # FIXED: Use 10% for notification
             )
             
             # Remove take profit and set trailing stop
@@ -380,17 +445,19 @@ class TradeEngine:
                 info = self.get_symbol_info()
                 if info:
                     side = self.position['side']
-                    distance_pct = self.trailing_stop_distance / 100
+                    distance_pct = 0.10  # FIXED: 10% minimum distance
                     
                     if side == 'Buy':
                         trailing_stop_price = current_price * (1 - distance_pct)
-                        active_price = current_price * 1.01  # 1% above current
+                        active_price = current_price * 1.005  # 0.5% above current
                     else:
                         trailing_stop_price = current_price * (1 + distance_pct)
-                        active_price = current_price * 0.99  # 1% below current
+                        active_price = current_price * 0.995  # 0.5% below current
                     
                     formatted_trailing_stop = self.format_price(info, trailing_stop_price)
                     formatted_active_price = self.format_price(info, active_price)
+                    
+                    print(f"Setting trailing stop: {formatted_trailing_stop}, active: {formatted_active_price}")
                     
                     # Remove TP and set trailing stop
                     resp = self.exchange.set_trading_stop(
@@ -426,6 +493,8 @@ class TradeEngine:
                 if success:
                     print(f"🔒 Trailing updated")
                     self.last_trailing_update = current_time
+
+
                     
     async def open_position(self, signal):
         """Open a new position based on signal"""
@@ -495,8 +564,8 @@ class TradeEngine:
             # Reset profit lock state
             self.profit_lock_active = False
             
-            # Send notification
-            await self.notifier.trade_opened(self.symbol, current_price, float(qty))
+            # Send notification with side parameter
+            await self.notifier.trade_opened(self.symbol, current_price, float(qty), side)
             
             return True
             
@@ -504,7 +573,7 @@ class TradeEngine:
             print(f"❌ Position open error: {e}")
             return False
     
-    async def close_position(self):
+    async def close_position(self, reason="Signal"):
         """Close current position"""
         try:
             if not self.position:
@@ -513,7 +582,7 @@ class TradeEngine:
             side = "Sell" if self.position['side'] == "Buy" else "Buy"
             qty = str(self.position['size'])
             
-            print(f"\n📉 Closing position: {qty} {self.symbol}")
+            print(f"\n📉 Closing position: {qty} {self.symbol} (Reason: {reason})")
             
             # Place closing order
             order = self.exchange.place_order(
@@ -532,12 +601,11 @@ class TradeEngine:
             print(f"✅ Position closed")
             
             # Calculate P&L
-            await asyncio.sleep(2)
-            
-            # Send notification
             pnl = self.position.get('unrealized_pnl', 0)
             pnl_pct = self.position.get('unrealized_pnl_pct', 0)
-            await self.notifier.trade_closed(self.symbol, pnl_pct, pnl)
+            
+            # Send notification with reason
+            await self.notifier.trade_closed(self.symbol, pnl_pct, pnl, reason)
             
             # Reset states
             self.position = None
@@ -556,7 +624,8 @@ class TradeEngine:
             if df is None:
                 return
             
-            # Check position
+            # Check position status first
+            old_position = self.position
             self.check_position()
             
             # Generate signal and get indicators
@@ -590,6 +659,7 @@ class TradeEngine:
             # Check profit lock if we have a position
             if self.position:
                 await self.check_profit_lock(current_price)
+                await self.check_loss_switch()  # Check for loss switching
             
             # Log current state
             position_info = 'None'
@@ -605,19 +675,30 @@ class TradeEngine:
                 f"Position: {position_info}", 
                 end='', flush=True)
             
-            # Handle signals (only if not in profit lock mode)
-            if signal and not self.profit_lock_active:
-                print(f"\n🎯 Signal: {signal['action']} @ ${signal['price']:.4f}")
+            # Handle signals 
+            if signal:
+                signal_action = signal['action']
                 
+                # Check if we have a position
                 if self.position:
-                    # Check if we should reverse position
-                    if (self.position['side'] == 'Buy' and signal['action'] == 'SELL') or \
-                    (self.position['side'] == 'Sell' and signal['action'] == 'BUY'):
-                        await self.close_position()
+                    current_side = self.position['side']
+                    
+                    # Check for opposite signal (position reversal)
+                    should_reverse = (
+                        (current_side == 'Buy' and signal_action == 'SELL') or 
+                        (current_side == 'Sell' and signal_action == 'BUY')
+                    )
+                    
+                    if should_reverse:
+                        print(f"\n🔄 Reversing position: {current_side} -> {signal_action}")
+                        await self.close_position("Reverse Signal")
                         await asyncio.sleep(2)
                         await self.open_position(signal)
+                    # If same direction signal, ignore (already in position)
+                    
                 else:
-                    # Open new position
+                    # No position, open new one
+                    print(f"\n🎯 Signal: {signal_action} @ ${signal['price']:.4f}")
                     await self.open_position(signal)
                 
                 self.last_signal_time = datetime.now()
@@ -642,6 +723,7 @@ class TradeEngine:
         print(f"⏱️  Timeframe: {self.timeframe} minutes")
         print(f"🎯 Strategy: RSI+MFI")
         print(f"🔒 Profit Lock: {self.break_even_pct}% | Trailing: {self.trailing_stop_distance}%")
+        print(f"🔄 Loss Switch: {self.loss_switch_threshold}%")
         print("\n" + "="*60 + "\n")
         
         self.running = True
@@ -662,6 +744,6 @@ class TradeEngine:
         # Close any open position
         if self.position:
             print("Closing open position...")
-            await self.close_position()
+            await self.close_position("Bot Stop")
         
         print("✅ Trading engine stopped")
