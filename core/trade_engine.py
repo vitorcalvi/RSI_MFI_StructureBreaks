@@ -6,7 +6,7 @@ from pybit.unified_trading import HTTP
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Import bot components
 from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
@@ -134,10 +134,11 @@ class TelegramNotifier:
 class TradeEngine:
     def __init__(self):
         # Configuration
-        self.symbol = os.getenv('SYMBOLS', 'SOL/USDT')
+        self.symbol = os.getenv('SYMBOLS')
         self.linear = self.symbol.replace('/', '')
         self.timeframe = '5'  # 5 minutes
         self.demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
+        self.leverage = int(os.getenv('LEVERAGE'))  # Set leverage from env or default to 10x
         
         # API credentials
         if self.demo_mode:
@@ -164,7 +165,7 @@ class TradeEngine:
         self.trailing_stop_distance = 1.0  # 1.0% trailing stop distance (minimum for Bybit)
         
         # Position switching for losses
-        self.loss_switch_threshold = -1.0  # Switch position at -2% loss
+        self.loss_switch_threshold = -1.2  # Switch position at -2% loss
         
     def connect(self):
         """Initialize exchange connection"""
@@ -179,6 +180,8 @@ class TradeEngine:
             server_time = self.exchange.get_server_time()
             if server_time.get('retCode') == 0:
                 print(f"✅ Connected to Bybit {'Testnet' if self.demo_mode else 'Live'}")
+                # Set leverage after connection
+                self.set_leverage()
                 return True
             else:
                 print(f"❌ Connection failed: {server_time.get('retMsg')}")
@@ -186,6 +189,25 @@ class TradeEngine:
         except Exception as e:
             print(f"❌ Connection error: {e}")
             return False
+
+    def set_leverage(self):
+        """Set leverage for the trading symbol"""
+        try:
+            print(f"🔧 Setting leverage to {self.leverage}x...")
+            resp = self.exchange.set_leverage(
+                category="linear",
+                symbol=self.linear,
+                buyLeverage=str(self.leverage),
+                sellLeverage=str(self.leverage)
+            )
+            
+            if resp.get('retCode') == 0:
+                print(f"✅ Leverage set to {self.leverage}x")
+            else:
+                print(f"❌ Failed to set leverage: {resp.get('retMsg')}")
+                
+        except Exception as e:
+            print(f"❌ Leverage setting error: {e}")
     
     def get_market_data(self):
         """Fetch latest market data"""
@@ -720,6 +742,7 @@ class TradeEngine:
         balance = self.get_account_balance()
         print(f"💰 Account balance: ${balance:.2f}")
         print(f"📊 Trading {self.symbol}")
+        print(f"⚡ Leverage: {self.leverage}x")
         print(f"⏱️  Timeframe: {self.timeframe} minutes")
         print(f"🎯 Strategy: RSI+MFI")
         print(f"🔒 Profit Lock: {self.break_even_pct}% | Trailing: {self.trailing_stop_distance}%")
