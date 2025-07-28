@@ -2,7 +2,6 @@ import json
 import os
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
 
 class RSIMFICloudStrategy:
     def __init__(self):
@@ -109,10 +108,28 @@ class RSIMFICloudStrategy:
             return pd.Series(['SIDEWAYS'] * len(close), index=close.index)
     
     def calculate_atr(self, df):
-        """Calculate ATR using pandas_ta"""
+        """Calculate ATR manually"""
         try:
-            atr = ta.atr(high=df['high'], low=df['low'], close=df['close'], length=self.atr_period)
-            return atr.bfill().fillna(0)
+            high = df['high'].astype(float)
+            low = df['low'].astype(float)
+            close = df['close'].astype(float)
+            
+            # Calculate True Range
+            high_low = high - low
+            high_close = np.abs(high - close.shift(1))
+            low_close = np.abs(low - close.shift(1))
+            
+            true_range = pd.DataFrame({
+                'hl': high_low,
+                'hc': high_close,
+                'lc': low_close
+            }).max(axis=1)
+            
+            # Calculate ATR using EMA
+            atr = true_range.ewm(span=self.atr_period, adjust=False).mean()
+            
+            return atr.fillna(0)
+            
         except Exception as e:
             print(f"ATR error: {e}")
             return pd.Series([0] * len(df), index=df.index)

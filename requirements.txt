@@ -1,9 +1,9 @@
 # Core Trading Libraries
 ccxt>=4.1.0
 pandas>=2.0.0
-numpy>=1.24.0
+numpy<2.0.0
 python-dotenv>=1.0.0
-pandas_ta
+
 # Technical Analysis
 ta>=0.10.2
 
@@ -42,6 +42,3 @@ ray[tune]
 # VectorBT (for backtesting)
 vectorbt
 
-# Additional utilities
-asyncio-mqtt
-websockets
