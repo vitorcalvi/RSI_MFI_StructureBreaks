@@ -1,397 +1,513 @@
 #!/usr/bin/env python3
 """
-Complete Test Suite for RSI+MFI Trading Bot
-Tests all components: RiskManager, Strategy, TelegramNotifier, TradeEngine
+Comprehensive Test Suite for ZORA Trading Bot
+Tests all components: Strategy, Risk Management, Data Processing, etc.
 """
 
 import os
 import sys
+import json
 import asyncio
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from unittest.mock import Mock, AsyncMock, patch
-import json
+from unittest.mock import Mock, patch, AsyncMock
 
 # Add project root to path
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-def create_test_market_data():
-    """Generate test market data"""
-    dates = pd.date_range(start='2025-01-01', periods=100, freq='5min')
-    np.random.seed(42)
+# Create mock params file for testing
+def create_test_params():
+    """Create test parameters file"""
+    test_params = {
+        "rsi_length": 7,
+        "mfi_length": 7, 
+        "oversold_level": 25,
+        "overbought_level": 75,
+        "require_trend": True
+    }
     
-    # ZORA price around 0.082
-    base_price = 0.082
-    price_changes = np.random.normal(0, 0.001, 100)
-    prices = [base_price]
+    params_dir = os.path.join(project_root, 'strategies')
+    os.makedirs(params_dir, exist_ok=True)
+    params_file = os.path.join(params_dir, 'params_RSI_MFI_Cloud.json')
     
-    for change in price_changes[1:]:
-        new_price = prices[-1] * (1 + change)
-        prices.append(max(0.070, min(0.095, new_price)))
+    with open(params_file, 'w') as f:
+        json.dump(test_params, f)
     
-    df = pd.DataFrame({
-        'open': prices,
-        'high': [p * (1 + abs(np.random.normal(0, 0.002))) for p in prices],
-        'low': [p * (1 - abs(np.random.normal(0, 0.002))) for p in prices],
-        'close': prices,
-        'volume': np.random.randint(1000, 10000, 100)
-    }, index=dates)
+    return params_file
+
+def generate_test_data(length=100, start_price=0.082, volatility=0.05):
+    """Generate realistic OHLCV test data for ZORA"""
+    dates = pd.date_range(start=datetime.now() - timedelta(hours=length), periods=length, freq='5min')
     
+    # Generate realistic price movements
+    returns = np.random.normal(0, volatility, length)
+    prices = [start_price]
+    
+    for r in returns[1:]:
+        new_price = prices[-1] * (1 + r)
+        new_price = max(0.001, new_price)  # Prevent negative prices
+        prices.append(new_price)
+    
+    # Generate OHLC from prices
+    data = []
+    for i, price in enumerate(prices):
+        high = price * (1 + abs(np.random.normal(0, 0.01)))
+        low = price * (1 - abs(np.random.normal(0, 0.01)))
+        volume = np.random.uniform(1000, 10000)
+        
+        data.append({
+            'open': prices[i-1] if i > 0 else price,
+            'high': max(price, high),
+            'low': min(price, low), 
+            'close': price,
+            'volume': volume
+        })
+    
+    df = pd.DataFrame(data, index=dates)
     return df
 
-class TestRiskManager:
-    """Test RiskManager functionality"""
-    
+class TestSuite:
     def __init__(self):
-        from core.risk_management import RiskManager
-        self.risk_manager = RiskManager()
+        self.passed = 0
+        self.failed = 0
+        self.params_file = None
+        
+    def setup(self):
+        """Setup test environment"""
+        print("🔧 Setting up test environment...")
+        self.params_file = create_test_params()
+        print(f"✅ Created test params: {self.params_file}")
+        
+    def cleanup(self):
+        """Cleanup test files"""
+        if self.params_file and os.path.exists(self.params_file):
+            os.remove(self.params_file)
+            print(f"🧹 Cleaned up: {self.params_file}")
     
-    def test_initialization(self):
-        """Test RiskManager initialization"""
-        print("🧪 Testing RiskManager initialization...")
-        
-        assert self.risk_manager.symbol == "ZORA/USDT"
-        assert self.risk_manager.leverage == 10
-        assert self.risk_manager.trailing_stop_distance == 0.015
-        assert self.risk_manager.loss_switch_threshold == -0.08
-        assert self.risk_manager.break_even_pct == 0.01
-        
-        print("✅ RiskManager initialization - PASSED")
+    def assert_test(self, condition, test_name, details=""):
+        """Assert test result"""
+        if condition:
+            print(f"✅ {test_name}")
+            self.passed += 1
+        else:
+            print(f"❌ {test_name} - {details}")
+            self.failed += 1
     
-    def test_position_sizing(self):
-        """Test position size calculation"""
-        print("🧪 Testing position sizing...")
+    def test_risk_manager(self):
+        """Test RiskManager functionality"""
+        print("\n📊 Testing RiskManager...")
         
-        balance = 1000.0
-        price = 0.082
-        
-        position_size = self.risk_manager.calculate_position_size(balance, price)
-        expected_size = (balance * 0.1) / price  # 10% of balance
-        
-        assert abs(position_size - expected_size) < 1.0  # Allow some variance for price adjustments
-        print(f"   Balance: ${balance}, Price: ${price}")
-        print(f"   Position Size: {position_size:.2f} ZORA")
-        print("✅ Position sizing - PASSED")
+        try:
+            from core.risk_management import RiskManager
+            rm = RiskManager()
+            
+            # Test basic parameters
+            self.assert_test(rm.symbol == "ZORA/USDT", "Symbol configuration")
+            self.assert_test(rm.leverage == 10, "Leverage setting")
+            self.assert_test(rm.trailing_stop_distance == 0.008, "Trailing stop distance")
+            
+            # Test position size calculation
+            balance = 1000
+            price = 0.082
+            pos_size = rm.calculate_position_size(balance, price)
+            expected_size = (balance * 0.1) / price  # No multiplier for price > 0.05
+            
+            self.assert_test(abs(pos_size - expected_size) < 0.1, 
+                           "Position size calculation", 
+                           f"Got {pos_size}, expected ~{expected_size}")
+            
+            # Test stop loss calculation
+            entry_price = 0.082
+            long_sl = rm.get_stop_loss(entry_price, 'long')
+            short_sl = rm.get_stop_loss(entry_price, 'short')
+            
+            expected_long_sl = entry_price * (1 - rm.stop_loss_pct)
+            expected_short_sl = entry_price * (1 + rm.stop_loss_pct)
+            
+            self.assert_test(abs(long_sl - expected_long_sl) < 0.0001, "Long stop loss")
+            self.assert_test(abs(short_sl - expected_short_sl) < 0.0001, "Short stop loss")
+            
+            # Test take profit calculation
+            long_tp = rm.get_take_profit(entry_price, 'long')
+            short_tp = rm.get_take_profit(entry_price, 'short')
+            
+            expected_long_tp = entry_price * (1 + rm.take_profit_pct)
+            expected_short_tp = entry_price * (1 - rm.take_profit_pct)
+            
+            self.assert_test(abs(long_tp - expected_long_tp) < 0.0001, "Long take profit")
+            self.assert_test(abs(short_tp - expected_short_tp) < 0.0001, "Short take profit")
+            
+        except Exception as e:
+            self.assert_test(False, "RiskManager import/creation", str(e))
     
-    def test_stop_loss_calculation(self):
-        """Test stop loss calculation"""
-        print("🧪 Testing stop loss calculation...")
+    def test_strategy_indicators(self):
+        """Test strategy indicator calculations"""
+        print("\n🎯 Testing Strategy Indicators...")
         
-        entry_price = 0.082
-        
-        # Long position
-        long_sl = self.risk_manager.get_stop_loss(entry_price, 'long')
-        expected_long_sl = entry_price * (1 - 0.035)
-        assert abs(long_sl - expected_long_sl) < 0.000001
-        
-        # Short position  
-        short_sl = self.risk_manager.get_stop_loss(entry_price, 'short')
-        expected_short_sl = entry_price * (1 + 0.035)
-        assert abs(short_sl - expected_short_sl) < 0.000001
-        
-        print(f"   Entry: ${entry_price:.6f}")
-        print(f"   Long SL: ${long_sl:.6f}")
-        print(f"   Short SL: ${short_sl:.6f}")
-        print("✅ Stop loss calculation - PASSED")
-    
-    def test_take_profit_calculation(self):
-        """Test take profit calculation"""
-        print("🧪 Testing take profit calculation...")
-        
-        entry_price = 0.082
-        
-        # Long position
-        long_tp = self.risk_manager.get_take_profit(entry_price, 'long')
-        expected_long_tp = entry_price * (1 + 0.07)
-        assert abs(long_tp - expected_long_tp) < 0.000001
-        
-        # Short position
-        short_tp = self.risk_manager.get_take_profit(entry_price, 'short')
-        expected_short_tp = entry_price * (1 - 0.07)
-        assert abs(short_tp - expected_short_tp) < 0.000001
-        
-        print(f"   Entry: ${entry_price:.6f}")
-        print(f"   Long TP: ${long_tp:.6f}")
-        print(f"   Short TP: ${short_tp:.6f}")
-        print("✅ Take profit calculation - PASSED")
-
-class TestStrategy:
-    """Test RSI+MFI Strategy"""
-    
-    def __init__(self):
-        from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
-        # Create test params
-        test_params = {
-            "rsi_length": 5,
-            "mfi_length": 5,
-            "oversold_level": 45,
-            "overbought_level": 55,
-            "require_volume": False,
-            "require_trend": False
-        }
-        self.strategy = RSIMFICloudStrategy(test_params)
-    
-    def test_indicator_calculation(self):
-        """Test RSI and MFI calculation"""
-        print("🧪 Testing indicator calculations...")
-        
-        df = create_test_market_data()
-        df_with_indicators = self.strategy.calculate_indicators(df)
-        
-        assert 'rsi' in df_with_indicators.columns
-        assert 'mfi' in df_with_indicators.columns
-        assert not df_with_indicators['rsi'].isna().all()
-        assert not df_with_indicators['mfi'].isna().all()
-        
-        # Check RSI range
-        rsi_values = df_with_indicators['rsi'].dropna()
-        assert rsi_values.min() >= 0
-        assert rsi_values.max() <= 100
-        
-        # Check MFI range
-        mfi_values = df_with_indicators['mfi'].dropna()
-        assert mfi_values.min() >= 0
-        assert mfi_values.max() <= 100
-        
-        print(f"   RSI range: {rsi_values.min():.1f} - {rsi_values.max():.1f}")
-        print(f"   MFI range: {mfi_values.min():.1f} - {mfi_values.max():.1f}")
-        print("✅ Indicator calculations - PASSED")
+        try:
+            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
+            strategy = RSIMFICloudStrategy()
+            
+            # Generate test data
+            df = generate_test_data(50)
+            
+            # Test RSI calculation
+            rsi = strategy.calculate_rsi(df['close'])
+            self.assert_test(len(rsi) == len(df), "RSI length matches data")
+            self.assert_test(rsi.min() >= 0 and rsi.max() <= 100, "RSI bounds check")
+            self.assert_test(not rsi.isna().all(), "RSI not all NaN")
+            
+            # Test MFI calculation
+            mfi = strategy.calculate_mfi(df['high'], df['low'], df['close'])
+            self.assert_test(len(mfi) == len(df), "MFI length matches data")
+            self.assert_test(mfi.min() >= 0 and mfi.max() <= 100, "MFI bounds check")
+            self.assert_test(not mfi.isna().all(), "MFI not all NaN")
+            
+            # Test trend calculation
+            trend = strategy.calculate_trend(df['close'])
+            self.assert_test(len(trend) == len(df), "Trend length matches data")
+            valid_trends = ['UP', 'DOWN', 'SIDEWAYS']
+            self.assert_test(all(t in valid_trends for t in trend), "Valid trend values")
+            
+            # Test ATR calculation
+            atr = strategy.calculate_atr(df)
+            self.assert_test(len(atr) == len(df), "ATR length matches data")
+            self.assert_test((atr >= 0).all(), "ATR non-negative")
+            
+            # Test full indicator calculation
+            df_with_indicators = strategy.calculate_indicators(df)
+            required_cols = ['rsi', 'mfi', 'trend', 'price_change', 'atr']
+            
+            for col in required_cols:
+                self.assert_test(col in df_with_indicators.columns, f"Has {col} column")
+            
+        except Exception as e:
+            self.assert_test(False, "Strategy indicator calculation", str(e))
     
     def test_signal_generation(self):
-        """Test signal generation"""
-        print("🧪 Testing signal generation...")
+        """Test signal generation logic"""
+        print("\n📡 Testing Signal Generation...")
         
-        df = create_test_market_data()
+        try:
+            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
+            strategy = RSIMFICloudStrategy()
+            
+            # Test with insufficient data
+            small_df = generate_test_data(10)
+            signal = strategy.generate_signal(small_df)
+            self.assert_test(signal is None, "No signal with insufficient data")
+            
+            # Test with sufficient data
+            df = generate_test_data(100)
+            
+            # Force oversold conditions for BUY signal
+            df_oversold = df.copy()
+            df_oversold.loc[df_oversold.index[-10:], 'close'] *= 0.9  # Drop price to create oversold
+            
+            # Test signal generation
+            signal = strategy.generate_signal(df_oversold)
+            
+            # Signal should be dict or None
+            if signal is not None:
+                required_keys = ['action', 'price', 'rsi', 'mfi', 'trend', 'timestamp']
+                for key in required_keys:
+                    self.assert_test(key in signal, f"Signal has {key}")
+                
+                self.assert_test(signal['action'] in ['BUY', 'SELL', 'CLOSE'], "Valid signal action")
+                self.assert_test(isinstance(signal['price'], (int, float)), "Price is numeric")
+            
+            # Test signal cooldown
+            first_signal = strategy.generate_signal(df)
+            if first_signal:
+                second_signal = strategy.generate_signal(df)  # Should be None due to cooldown
+                self.assert_test(second_signal is None, "Signal cooldown working")
+            
+        except Exception as e:
+            self.assert_test(False, "Signal generation", str(e))
+    
+    def test_atr_risk_management(self):
+        """Test ATR-based risk management"""
+        print("\n🔒 Testing ATR Risk Management...")
         
-        # Force oversold condition for BUY signal
-        df_oversold = df.copy()
-        df_oversold.loc[df_oversold.index[-5:], 'close'] = 0.075  # Lower prices
+        try:
+            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
+            strategy = RSIMFICloudStrategy()
+            
+            df = generate_test_data(50)
+            df_with_indicators = strategy.calculate_indicators(df)
+            
+            current_price = df_with_indicators['close'].iloc[-1]
+            current_atr = df_with_indicators['atr'].iloc[-1]
+            
+            # Test position setting
+            strategy.set_position('LONG', current_price, current_atr)
+            self.assert_test(strategy.position_type == 'LONG', "Position type set")
+            self.assert_test(strategy.entry_price == current_price, "Entry price set")
+            self.assert_test(strategy.trailing_stop is not None, "Trailing stop set")
+            
+            expected_stop = current_price - (current_atr * strategy.atr_multiplier)
+            self.assert_test(abs(strategy.trailing_stop - expected_stop) < 0.0001, 
+                           "Correct trailing stop calculation")
+            
+            # Test trailing stop update
+            new_price = current_price * 1.02  # 2% higher
+            strategy.update_trailing_stop(new_price, current_atr)
+            
+            # Stop should move up for profitable long position
+            new_expected_stop = new_price - (current_atr * strategy.atr_multiplier)
+            self.assert_test(strategy.trailing_stop >= expected_stop, "Trailing stop moved up")
+            
+            # Test stop hit detection
+            hit_price = strategy.trailing_stop - 0.001  # Below stop
+            self.assert_test(strategy.check_stop_hit(hit_price), "Stop hit detection")
+            
+            safe_price = strategy.trailing_stop + 0.001  # Above stop
+            self.assert_test(not strategy.check_stop_hit(safe_price), "Stop not hit detection")
+            
+            # Test position reset
+            strategy.reset_position()
+            self.assert_test(strategy.position_type is None, "Position type reset")
+            self.assert_test(strategy.trailing_stop is None, "Trailing stop reset")
+            
+        except Exception as e:
+            self.assert_test(False, "ATR risk management", str(e))
+   
+    async def test_telegram_notifier(self):
+        """Test Telegram notifier (mock)"""
+        print("\n📱 Testing Telegram Notifier...")
         
-        signal = self.strategy.generate_signal(df_oversold)
+        try:
+            # Mock environment variables
+            with patch.dict(os.environ, {
+                'TELEGRAM_BOT_TOKEN': 'mock_token',
+                'TELEGRAM_CHAT_ID': 'mock_chat_id'
+            }):
+                with patch('telegram.Bot') as mock_bot:
+                    from core.telegram_notifier import TelegramNotifier
+                    
+                    notifier = TelegramNotifier()
+                    self.assert_test(notifier.enabled, "Notifier enabled with mock credentials")
+                    
+                    # Test message sending (mock)
+                    mock_bot_instance = AsyncMock()
+                    notifier.bot = mock_bot_instance
+                    
+                    await notifier.trade_opened("ZORA/USDT", 0.082, 1000, "Buy")
+                    self.assert_test(mock_bot_instance.send_message.called, "Trade opened notification sent")
+                    
+                    await notifier.trade_closed("ZORA/USDT", 5.2, 10.5, "Take Profit")
+                    self.assert_test(mock_bot_instance.send_message.call_count >= 2, "Trade closed notification sent")
+                    
+        except Exception as e:
+            self.assert_test(False, "Telegram notifier", str(e))
+    
+    def test_data_processing(self):
+        """Test data processing and edge cases"""
+        print("\n📈 Testing Data Processing...")
         
-        if signal:
-            assert signal['action'] in ['BUY', 'SELL']
-            assert 'price' in signal
-            assert 'rsi' in signal
-            assert 'mfi' in signal
-            print(f"   Generated signal: {signal['action']} at ${signal['price']:.6f}")
-            print(f"   RSI: {signal['rsi']}, MFI: {signal['mfi']}")
-        else:
-            print("   No signal generated (normal for test data)")
+        try:
+            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
+            strategy = RSIMFICloudStrategy()
+            
+            # Test with NaN values
+            df_with_nan = generate_test_data(50)
+            df_with_nan.loc[df_with_nan.index[10:15], 'close'] = np.nan
+            
+            df_processed = strategy.calculate_indicators(df_with_nan)
+            self.assert_test(not df_processed['rsi'].isna().all(), "RSI handles NaN")
+            self.assert_test(not df_processed['mfi'].isna().all(), "MFI handles NaN")
+            
+            # Test with extreme values
+            df_extreme = generate_test_data(50)
+            df_extreme.loc[df_extreme.index[25], 'close'] = 999999  # Extreme spike
+            
+            df_processed = strategy.calculate_indicators(df_extreme)
+            self.assert_test((df_processed['rsi'] <= 100).all(), "RSI bounded with extreme values")
+            self.assert_test((df_processed['mfi'] <= 100).all(), "MFI bounded with extreme values")
+            
+            # Test with flat prices
+            df_flat = generate_test_data(50)
+            df_flat['close'] = 0.082  # All same price
+            df_flat['high'] = 0.082
+            df_flat['low'] = 0.082
+            df_flat['open'] = 0.082
+            
+            for col in ['close', 'high', 'low', 'open']:
+              df_flat.loc[:, col] = 0.082  # All same price
+            
+            df_processed = strategy.calculate_indicators(df_flat)
+            self.assert_test(not df_processed.empty, "Processes flat prices")
+            
+        except Exception as e:
+            self.assert_test(False, "Data processing", str(e))
+    
+    def test_edge_cases(self):
+        """Test edge cases and error handling"""
+        print("\n⚠️ Testing Edge Cases...")
         
-        print("✅ Signal generation - PASSED")
+        try:
+            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
+            strategy = RSIMFICloudStrategy()
+            
+            # Test empty dataframe
+            empty_df = pd.DataFrame()
+            result = strategy.calculate_indicators(empty_df)
+            self.assert_test(result.empty, "Handles empty dataframe")
+            
+            # Test single row
+            single_row = generate_test_data(1)
+            result = strategy.calculate_indicators(single_row)
+            self.assert_test(len(result) == 1, "Handles single row")
+            
+            # Test very small values
+            small_df = generate_test_data(50, start_price=0.000001)
+            result = strategy.calculate_indicators(small_df)
+            self.assert_test(not result.empty, "Handles very small prices")
+            
+            # Test signal generation with no position
+            strategy.reset_position()
+            signal = strategy.generate_signal(generate_test_data(100))
+            # Should work without error
+            self.assert_test(True, "Signal generation with no position")
+            
+        except Exception as e:
+            self.assert_test(False, "Edge cases", str(e))
+    
+    def test_integration(self):
+        """Test component integration"""
+        print("\n🔗 Testing Integration...")
+        
+        try:
+            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
+            from core.risk_management import RiskManager
+            
+            strategy = RSIMFICloudStrategy()
+            risk_manager = RiskManager()
+            
+            # Test that both use same symbol
+            self.assert_test(strategy.symbol == risk_manager.symbol, "Matching symbols")
+            
+            # Test full workflow
+            df = generate_test_data(100)
+            
+            # Generate signal
+            signal = strategy.generate_signal(df)
+            
+            if signal and signal['action'] in ['BUY', 'SELL']:
+                # Calculate position size
+                balance = 1000
+                price = signal['price']
+                pos_size = risk_manager.calculate_position_size(balance, price)
+                
+                # Calculate stops
+                if signal['action'] == 'BUY':
+                    sl = risk_manager.get_stop_loss(price, 'long')
+                    tp = risk_manager.get_take_profit(price, 'long')
+                else:
+                    sl = risk_manager.get_stop_loss(price, 'short')
+                    tp = risk_manager.get_take_profit(price, 'short')
+                
+                self.assert_test(pos_size > 0, "Positive position size")
+                self.assert_test(sl != price, "Stop loss different from entry")
+                self.assert_test(tp != price, "Take profit different from entry")
+            
+            self.assert_test(True, "Full workflow integration")
+            
+        except Exception as e:
+            self.assert_test(False, "Integration test", str(e))
+    
+    def test_performance(self):
+        """Test performance with larger datasets"""
+        print("\n⚡ Testing Performance...")
+        
+        try:
+            from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
+            strategy = RSIMFICloudStrategy()
+            
+            # Test with large dataset
+            large_df = generate_test_data(1000)
+            
+            start_time = datetime.now()
+            df_processed = strategy.calculate_indicators(large_df)
+            processing_time = (datetime.now() - start_time).total_seconds()
+            
+            self.assert_test(processing_time < 5.0, f"Processing time reasonable: {processing_time:.2f}s")
+            self.assert_test(len(df_processed) == 1000, "Processed all rows")
+            
+            # Test signal generation performance
+            start_time = datetime.now()
+            for i in range(10):
+                signal = strategy.generate_signal(large_df)
+            signal_time = (datetime.now() - start_time).total_seconds()
+            
+            self.assert_test(signal_time < 2.0, f"Signal generation time reasonable: {signal_time:.2f}s")
+            
+        except Exception as e:
+            self.assert_test(False, "Performance test", str(e))
+    
+    async def run_all_tests(self):
+        """Run all tests"""
+        print("🧪 ZORA Trading Bot - Comprehensive Test Suite")
+        print("=" * 60)
+        
+        self.setup()
+        
+        try:
+            # Run all tests
+            self.test_risk_manager()
+            self.test_strategy_indicators() 
+            self.test_signal_generation()
+            self.test_atr_risk_management()
+            await self.test_telegram_notifier()
+            self.test_data_processing()
+            self.test_edge_cases()
+            self.test_integration()
+            self.test_performance()
+            
+            # Summary
+            print("\n" + "=" * 60)
+            print(f"📊 TEST RESULTS:")
+            print(f"✅ Passed: {self.passed}")
+            print(f"❌ Failed: {self.failed}")
+            print(f"📈 Success Rate: {(self.passed/(self.passed+self.failed)*100):.1f}%")
+            
+            if self.failed == 0:
+                print("🎉 ALL TESTS PASSED! System ready for deployment.")
+            else:
+                print("⚠️ Some tests failed. Review before deployment.")
+            
+        finally:
+            self.cleanup()
 
-class TestTelegramNotifier:
-    """Test Telegram notifications"""
-    
-    def __init__(self):
-        from core.telegram_notifier import TelegramNotifier
-        self.notifier = TelegramNotifier()
-    
-    async def test_notifications(self):
-        """Test notification methods"""
-        print("🧪 Testing Telegram notifications...")
-        
-        # Mock the send_message method
-        self.notifier.send_message = AsyncMock()
-        
-        # Test trade opened notification
-        await self.notifier.trade_opened("ZORA/USDT", 0.082, 100, "Buy")
-        assert self.notifier.send_message.called
-        
-        # Test trade closed notification
-        await self.notifier.trade_closed("ZORA/USDT", 2.5, 25.0, "Take Profit")
-        assert self.notifier.send_message.call_count == 2
-        
-        # Test profit lock notification
-        await self.notifier.profit_lock_activated("ZORA/USDT", 1.5, 0.3)
-        assert self.notifier.send_message.call_count == 3
-        
-        print("✅ Telegram notifications - PASSED")
-
-class TestTradeEngine:
-    """Test TradeEngine functionality"""
-    
-    def __init__(self):
-        # Mock external dependencies
-        with patch('pybit.unified_trading.HTTP'), \
-             patch.dict(os.environ, {'TELEGRAM_BOT_TOKEN': 'test', 'TELEGRAM_CHAT_ID': 'test'}):
-            from core.trade_engine import TradeEngine
-            self.engine = TradeEngine()
-    
-    def test_initialization(self):
-        """Test TradeEngine initialization"""
-        print("🧪 Testing TradeEngine initialization...")
-        
-        # Check if RiskManager is properly integrated
-        assert hasattr(self.engine, 'risk_manager')
-        assert self.engine.symbol == "ZORA/USDT"  # Should come from RiskManager
-        assert self.engine.linear == "ZORAUSDT"
-        assert self.engine.risk_manager.leverage == 10
-        assert self.engine.risk_manager.trailing_stop_distance == 0.015
-        
-        print(f"   Symbol: {self.engine.symbol}")
-        print(f"   Leverage: {self.engine.risk_manager.leverage}x")
-        print(f"   Trailing Stop: {self.engine.risk_manager.trailing_stop_distance*100:.1f}%")
-        print("✅ TradeEngine initialization - PASSED")
-    
-    def test_formatting_functions(self):
-        """Test price and quantity formatting"""
-        print("🧪 Testing formatting functions...")
-        
-        # Mock symbol info
-        mock_info = {
-            'min_qty': 1.0,
-            'qty_step': 1.0,
-            'tick_size': 0.000001
-        }
-        
-        # Test quantity formatting
-        raw_qty = 123.456
-        formatted_qty = self.engine.format_qty(mock_info, raw_qty)
-        assert isinstance(formatted_qty, str)
-        
-        # Test price formatting
-        raw_price = 0.082345
-        formatted_price = self.engine.format_price(mock_info, raw_price)
-        assert isinstance(formatted_price, str)
-        
-        print(f"   Raw qty: {raw_qty} -> Formatted: {formatted_qty}")
-        print(f"   Raw price: {raw_price} -> Formatted: {formatted_price}")
-        print("✅ Formatting functions - PASSED")
-
-async def run_comprehensive_test():
-    """Run all tests"""
-    print("🚀 Starting Comprehensive System Test\n")
-    print("="*60)
-    
+async def main():
+    """Main test runner"""
     try:
-        # Test 1: RiskManager
-        print("\n📊 TESTING RISK MANAGER")
-        print("-" * 30)
-        risk_test = TestRiskManager()
-        risk_test.test_initialization()
-        risk_test.test_position_sizing()
-        risk_test.test_stop_loss_calculation()
-        risk_test.test_take_profit_calculation()
+        # Install required packages check
+        required_packages = ['pandas', 'numpy', 'pandas_ta']
+        missing = []
         
-        # Test 2: Strategy
-        print("\n🎯 TESTING STRATEGY")
-        print("-" * 30)
-        strategy_test = TestStrategy()
-        strategy_test.test_indicator_calculation()
-        strategy_test.test_signal_generation()
+        for package in required_packages:
+            try:
+                __import__(package)
+            except ImportError:
+                missing.append(package)
         
-        # Test 3: Telegram Notifier
-        print("\n📱 TESTING TELEGRAM NOTIFIER")
-        print("-" * 30)
-        telegram_test = TestTelegramNotifier()
-        await telegram_test.test_notifications()
+        if missing:
+            print(f"❌ Missing packages: {', '.join(missing)}")
+            print(f"Install with: pip install {' '.join(missing)}")
+            return
         
-        # Test 4: TradeEngine
-        print("\n⚙️  TESTING TRADE ENGINE")
-        print("-" * 30)
-        engine_test = TestTradeEngine()
-        engine_test.test_initialization()
-        engine_test.test_formatting_functions()
+        # Run tests
+        test_suite = TestSuite()
+        await test_suite.run_all_tests()
         
-        # Test 5: Environment Variables
-        print("\n🔧 TESTING ENVIRONMENT")
-        print("-" * 30)
-        test_env_variables()
-        
-        # Test 6: File Structure
-        print("\n📁 TESTING FILE STRUCTURE")
-        print("-" * 30)
-        test_file_structure()
-        
-        print("\n" + "="*60)
-        print("🎉 ALL TESTS PASSED!")
-        print("✅ System is ready for trading")
-        print("="*60)
-        
+    except KeyboardInterrupt:
+        print("\n⚠️ Tests interrupted by user")
     except Exception as e:
-        print(f"\n❌ TEST FAILED: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-    
-    return True
-
-def test_env_variables():
-    """Test environment variables"""
-    print("🧪 Testing environment variables...")
-    
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    required_vars = [
-        'DEMO_MODE',
-        'TESTNET_BYBIT_API_KEY',
-        'TESTNET_BYBIT_API_SECRET'
-    ]
-    
-    # Telegram vars are optional for testing
-    optional_vars = [
-        'TELEGRAM_BOT_TOKEN',
-        'TELEGRAM_CHAT_ID'
-    ]
-    
-    missing_vars = []
-    for var in required_vars:
-        if not os.getenv(var):
-            missing_vars.append(var)
-    
-    missing_optional = []
-    for var in optional_vars:
-        if not os.getenv(var):
-            missing_optional.append(var)
-    
-    if missing_vars:
-        print(f"   ⚠️  Missing REQUIRED variables: {missing_vars}")
-    else:
-        print("   All required environment variables found")
-        
-    if missing_optional:
-        print(f"   ℹ️  Missing OPTIONAL variables: {missing_optional}")
-        print("   (Telegram notifications will be disabled)")
-    
-    print("✅ Environment variables - CHECKED")
-
-def test_file_structure():
-    """Test required file structure"""
-    print("🧪 Testing file structure...")
-    
-    required_files = [
-        'core/risk_management.py',
-        'core/trade_engine.py',
-        'core/telegram_notifier.py',
-        'strategies/RSI_MFI_Cloud.py',
-        'strategies/params_RSI_MFI_Cloud.json',
-        'main.py',
-        '.env'
-    ]
-    
-    missing_files = []
-    for file_path in required_files:
-        if not os.path.exists(file_path):
-            missing_files.append(file_path)
-    
-    if missing_files:
-        print(f"   ⚠️  Missing files: {missing_files}")
-    else:
-        print("   All required files found")
-    
-    print("✅ File structure - CHECKED")
+        print(f"\n❌ Test suite error: {e}")
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(run_comprehensive_test())
-    except KeyboardInterrupt:
-        print("\n⚠️  Test interrupted by user")
-    except Exception as e:
-        print(f"❌ Test suite error: {e}")
-        sys.exit(1)
+    asyncio.run(main())

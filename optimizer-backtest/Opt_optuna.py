@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # Import your strategy
 from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
 
-def fetch_bybit_data(symbol='SOL/USDT', timeframe='5h', days=365):
+def fetch_bybit_data(symbol='SOL/USDT', timeframe='h', days=365):
     """Fetch data from Bybit"""
     # Initialize Bybit exchange without credentials for public data
     exchange = ccxt.bybit({

@@ -1,9 +1,0 @@
-{
-  "rsi_length": 5,
-  "mfi_length": 5,
-  "oversold_level": 25,
-  "overbought_level": 75,
-  "fast_mfi_ema": 7,
-  "slow_mfi_ema": 20,
-  "require_trend": true
-}

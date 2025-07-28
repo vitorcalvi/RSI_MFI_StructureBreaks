@@ -112,7 +112,7 @@ class RSIMFICloudStrategy:
         """Calculate ATR using pandas_ta"""
         try:
             atr = ta.atr(high=df['high'], low=df['low'], close=df['close'], length=self.atr_period)
-            return atr.fillna(method='bfill').fillna(0)
+            return atr.bfill().fillna(0)
         except Exception as e:
             print(f"ATR error: {e}")
             return pd.Series([0] * len(df), index=df.index)
@@ -173,7 +173,7 @@ class RSIMFICloudStrategy:
             self.params['mfi_length']
         )
         df['trend'] = self.calculate_trend(df['close'])
-        df['price_change'] = df['close'].pct_change()
+        df['price_change'] = df['close'].pct_change(fill_method=None)
         df['atr'] = self.calculate_atr(df)
         
         return df
