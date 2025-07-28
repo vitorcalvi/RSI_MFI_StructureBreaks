@@ -12,10 +12,10 @@ class RiskManager:
         self.stop_loss_pct = 0.035         # 3.5% price movement
         self.loss_switch_threshold = -0.08 # -8% account loss before switching
         
-        # Profit levels
+        # Profit levels (optimized for ZORA price ~$0.08)
         self.take_profit_pct = 0.07        # 7% price movement
         self.break_even_pct = 0.01         # 1% price movement (profit lock trigger = 10% account P&L)
-        self.trailing_stop_distance = 0.015 # 1.5% trailing distance
+        self.trailing_stop_distance = 0.008 # 0.8% trailing distance (tighter for volatile low-price coin)
         
         # Profit protection
         self.profit_protection_threshold = 4.0  # 4% account profit threshold

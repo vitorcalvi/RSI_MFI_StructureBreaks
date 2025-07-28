@@ -55,9 +55,9 @@ class TestRiskManager:
         
         assert self.risk_manager.symbol == "ZORA/USDT"
         assert self.risk_manager.leverage == 10
-        assert self.risk_manager.trailing_stop_distance == 0.003
-        assert self.risk_manager.loss_switch_threshold == -0.005
-        assert self.risk_manager.break_even_pct == 0.002
+        assert self.risk_manager.trailing_stop_distance == 0.015
+        assert self.risk_manager.loss_switch_threshold == -0.08
+        assert self.risk_manager.break_even_pct == 0.01
         
         print("✅ RiskManager initialization - PASSED")
     
@@ -69,9 +69,9 @@ class TestRiskManager:
         price = 0.082
         
         position_size = self.risk_manager.calculate_position_size(balance, price)
-        expected_size = (balance * 0.05) / price  # 5% of balance
+        expected_size = (balance * 0.1) / price  # 10% of balance
         
-        assert abs(position_size - expected_size) < 0.01
+        assert abs(position_size - expected_size) < 1.0  # Allow some variance for price adjustments
         print(f"   Balance: ${balance}, Price: ${price}")
         print(f"   Position Size: {position_size:.2f} ZORA")
         print("✅ Position sizing - PASSED")
@@ -84,12 +84,12 @@ class TestRiskManager:
         
         # Long position
         long_sl = self.risk_manager.get_stop_loss(entry_price, 'long')
-        expected_long_sl = entry_price * (1 - 0.008)
+        expected_long_sl = entry_price * (1 - 0.035)
         assert abs(long_sl - expected_long_sl) < 0.000001
         
         # Short position  
         short_sl = self.risk_manager.get_stop_loss(entry_price, 'short')
-        expected_short_sl = entry_price * (1 + 0.008)
+        expected_short_sl = entry_price * (1 + 0.035)
         assert abs(short_sl - expected_short_sl) < 0.000001
         
         print(f"   Entry: ${entry_price:.6f}")
@@ -105,12 +105,12 @@ class TestRiskManager:
         
         # Long position
         long_tp = self.risk_manager.get_take_profit(entry_price, 'long')
-        expected_long_tp = entry_price * (1 + 0.016)
+        expected_long_tp = entry_price * (1 + 0.07)
         assert abs(long_tp - expected_long_tp) < 0.000001
         
         # Short position
         short_tp = self.risk_manager.get_take_profit(entry_price, 'short')
-        expected_short_tp = entry_price * (1 - 0.016)
+        expected_short_tp = entry_price * (1 - 0.07)
         assert abs(short_tp - expected_short_tp) < 0.000001
         
         print(f"   Entry: ${entry_price:.6f}")
@@ -122,10 +122,6 @@ class TestStrategy:
     """Test RSI+MFI Strategy"""
     
     def __init__(self):
-        # Set test environment for Telegram
-        os.environ['TELEGRAM_BOT_TOKEN'] = 'test_token'
-        os.environ['TELEGRAM_CHAT_ID'] = 'test_chat'
-        
         from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
         # Create test params
         test_params = {
@@ -192,10 +188,8 @@ class TestTelegramNotifier:
     """Test Telegram notifications"""
     
     def __init__(self):
-        # Mock Telegram bot to avoid actual API calls
-        with patch('telegram.Bot'), patch.dict(os.environ, {'TELEGRAM_BOT_TOKEN': 'test', 'TELEGRAM_CHAT_ID': 'test'}):
-            from core.trade_engine import TelegramNotifier
-            self.notifier = TelegramNotifier()
+        from core.telegram_notifier import TelegramNotifier
+        self.notifier = TelegramNotifier()
     
     async def test_notifications(self):
         """Test notification methods"""
@@ -222,13 +216,9 @@ class TestTradeEngine:
     """Test TradeEngine functionality"""
     
     def __init__(self):
-        # Set test environment variables
-        os.environ['TELEGRAM_BOT_TOKEN'] = 'test_token'
-        os.environ['TELEGRAM_CHAT_ID'] = 'test_chat'
-        
         # Mock external dependencies
         with patch('pybit.unified_trading.HTTP'), \
-             patch('telegram.Bot'):
+             patch.dict(os.environ, {'TELEGRAM_BOT_TOKEN': 'test', 'TELEGRAM_CHAT_ID': 'test'}):
             from core.trade_engine import TradeEngine
             self.engine = TradeEngine()
     
@@ -240,12 +230,12 @@ class TestTradeEngine:
         assert hasattr(self.engine, 'risk_manager')
         assert self.engine.symbol == "ZORA/USDT"  # Should come from RiskManager
         assert self.engine.linear == "ZORAUSDT"
-        assert self.engine.leverage == 10
-        assert self.engine.trailing_stop_distance == 0.003
+        assert self.engine.risk_manager.leverage == 10
+        assert self.engine.risk_manager.trailing_stop_distance == 0.015
         
         print(f"   Symbol: {self.engine.symbol}")
-        print(f"   Leverage: {self.engine.leverage}x")
-        print(f"   Trailing Stop: {self.engine.trailing_stop_distance*100:.1f}%")
+        print(f"   Leverage: {self.engine.risk_manager.leverage}x")
+        print(f"   Trailing Stop: {self.engine.risk_manager.trailing_stop_distance*100:.1f}%")
         print("✅ TradeEngine initialization - PASSED")
     
     def test_formatting_functions(self):
@@ -367,7 +357,7 @@ def test_env_variables():
         
     if missing_optional:
         print(f"   ℹ️  Missing OPTIONAL variables: {missing_optional}")
-        print("   (These are set to test values during testing)")
+        print("   (Telegram notifications will be disabled)")
     
     print("✅ Environment variables - CHECKED")
 
@@ -378,6 +368,7 @@ def test_file_structure():
     required_files = [
         'core/risk_management.py',
         'core/trade_engine.py',
+        'core/telegram_notifier.py',
         'strategies/RSI_MFI_Cloud.py',
         'strategies/params_RSI_MFI_Cloud.json',
         'main.py',

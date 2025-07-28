@@ -2,16 +2,32 @@ import json
 import os
 import pandas as pd
 import numpy as np
+import pandas_ta as ta
 
 class RSIMFICloudStrategy:
     def __init__(self):
+        # Trading Symbol
+        self.symbol = "ZORA/USDT"
+        
+        # ATR Risk Management (optimized for ZORA volatility)
+        self.atr_period = 14
+        self.atr_multiplier = 1.5          # Reduced from 2.0 for tighter stops
+        
+        # Signal Management
+        self.signal_cooldown_period = 5    # Bars to wait between signals
+        
+        # Load strategy parameters
         current_dir = os.path.dirname(os.path.abspath(__file__))
         params_file = os.path.join(current_dir, 'params_RSI_MFI_Cloud.json')
         with open(params_file, 'r') as f:
             self.params = json.load(f)
         
+        # Runtime variables
         self.last_signal = None
         self.signal_cooldown = 0
+        self.trailing_stop = None
+        self.position_type = None
+        self.entry_price = None
         
     def calculate_rsi(self, prices, period=7):
         """Calculate RSI"""
@@ -91,6 +107,57 @@ class RSIMFICloudStrategy:
         except Exception as e:
             print(f"Trend error: {e}")
             return pd.Series(['SIDEWAYS'] * len(close), index=close.index)
+    
+    def calculate_atr(self, df):
+        """Calculate ATR using pandas_ta"""
+        try:
+            atr = ta.atr(high=df['high'], low=df['low'], close=df['close'], length=self.atr_period)
+            return atr.fillna(method='bfill').fillna(0)
+        except Exception as e:
+            print(f"ATR error: {e}")
+            return pd.Series([0] * len(df), index=df.index)
+    
+    def set_position(self, position_type, entry_price, current_atr):
+        """Initialize position with ATR-based stop"""
+        self.position_type = position_type
+        self.entry_price = entry_price
+        
+        if position_type == 'LONG':
+            self.trailing_stop = entry_price - (current_atr * self.atr_multiplier)
+        elif position_type == 'SHORT':
+            self.trailing_stop = entry_price + (current_atr * self.atr_multiplier)
+    
+    def update_trailing_stop(self, current_price, current_atr):
+        """Update trailing stop based on current price and ATR"""
+        if self.position_type is None or self.trailing_stop is None:
+            return self.trailing_stop
+            
+        if self.position_type == 'LONG':
+            new_stop = current_price - (current_atr * self.atr_multiplier)
+            self.trailing_stop = max(self.trailing_stop, new_stop)
+        elif self.position_type == 'SHORT':
+            new_stop = current_price + (current_atr * self.atr_multiplier)
+            self.trailing_stop = min(self.trailing_stop, new_stop)
+            
+        return self.trailing_stop
+    
+    def check_stop_hit(self, current_price):
+        """Check if trailing stop is hit"""
+        if self.trailing_stop is None or self.position_type is None:
+            return False
+            
+        if self.position_type == 'LONG':
+            return current_price <= self.trailing_stop
+        elif self.position_type == 'SHORT':
+            return current_price >= self.trailing_stop
+            
+        return False
+    
+    def reset_position(self):
+        """Clear position data"""
+        self.trailing_stop = None
+        self.position_type = None
+        self.entry_price = None
         
     def calculate_indicators(self, df):
         """Calculate all indicators"""
@@ -107,12 +174,13 @@ class RSIMFICloudStrategy:
         )
         df['trend'] = self.calculate_trend(df['close'])
         df['price_change'] = df['close'].pct_change()
+        df['atr'] = self.calculate_atr(df)
         
         return df
     
     def generate_signal(self, df):
-        """Generate trading signals"""
-        min_bars = max(self.params['rsi_length'], self.params['mfi_length'], 26) + 5
+        """Generate trading signals with ATR-based risk management"""
+        min_bars = max(self.params['rsi_length'], self.params['mfi_length'], 26, self.atr_period) + 5
         if len(df) < min_bars:
             return None
         
@@ -124,10 +192,25 @@ class RSIMFICloudStrategy:
         current_mfi = df['mfi'].iloc[-1]
         current_price = df['close'].iloc[-1]
         current_trend = df['trend'].iloc[-1]
+        current_atr = df['atr'].iloc[-1]
         
         # Validate
-        if pd.isna(current_rsi) or pd.isna(current_mfi) or pd.isna(current_price):
+        if pd.isna(current_rsi) or pd.isna(current_mfi) or pd.isna(current_price) or pd.isna(current_atr):
             return None
+        
+        # Check if current position should be closed (trailing stop)
+        if self.position_type:
+            self.update_trailing_stop(current_price, current_atr)
+            
+            if self.check_stop_hit(current_price):
+                self.reset_position()
+                return {
+                    'action': 'CLOSE',
+                    'reason': 'TRAILING_STOP_HIT',
+                    'price': current_price,
+                    'stop_price': self.trailing_stop,
+                    'timestamp': df.index[-1]
+                }
         
         # Signal cooldown
         if self.signal_cooldown > 0:
@@ -155,7 +238,9 @@ class RSIMFICloudStrategy:
         # Generate signals
         if all(buy_conditions):
             self.last_signal = 'BUY'
-            self.signal_cooldown = 5
+            self.signal_cooldown = self.signal_cooldown_period
+            self.set_position('LONG', current_price, current_atr)
+            
             return {
                 'action': 'BUY',
                 'price': current_price,
@@ -163,12 +248,16 @@ class RSIMFICloudStrategy:
                 'mfi': round(current_mfi, 2),
                 'trend': current_trend,
                 'timestamp': df.index[-1],
-                'confidence': 'TREND_FILTERED'
+                'confidence': 'TREND_FILTERED',
+                'trailing_stop': round(self.trailing_stop, 4),
+                'atr': round(current_atr, 4)
             }
             
         elif all(sell_conditions):
             self.last_signal = 'SELL'
-            self.signal_cooldown = 5
+            self.signal_cooldown = self.signal_cooldown_period
+            self.set_position('SHORT', current_price, current_atr)
+            
             return {
                 'action': 'SELL',
                 'price': current_price,
@@ -176,7 +265,9 @@ class RSIMFICloudStrategy:
                 'mfi': round(current_mfi, 2),
                 'trend': current_trend,
                 'timestamp': df.index[-1],
-                'confidence': 'TREND_FILTERED'
+                'confidence': 'TREND_FILTERED',
+                'trailing_stop': round(self.trailing_stop, 4),
+                'atr': round(current_atr, 4)
             }
         
         return None

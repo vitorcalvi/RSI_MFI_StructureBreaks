@@ -92,9 +92,19 @@ class TradeEngine:
             )
             
             if klines.get('retCode') != 0:
+                print(f"❌ API error: {klines.get('retMsg')}")
                 return None
             
+            # Check if result structure exists
+            if not klines.get('result') or not klines['result'].get('list'):
+                print("❌ No market data in response")
+                return None
+                
             data = klines['result']['list']
+            if not data:
+                print("❌ Empty market data")
+                return None
+            
             df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
             df['timestamp'] = pd.to_datetime(df['timestamp'].astype(float), unit='ms')
             df = df.set_index('timestamp')
@@ -102,7 +112,14 @@ class TradeEngine:
             for col in ['open', 'high', 'low', 'close', 'volume']:
                 df[col] = pd.to_numeric(df[col])
             
-            return df.sort_index()
+            df = df.sort_index()
+            
+            # Ensure we have data
+            if df.empty:
+                print("❌ Empty DataFrame after processing")
+                return None
+                
+            return df
         except Exception as e:
             print(f"❌ Market data error: {e}")
             return None
@@ -247,33 +264,25 @@ class TradeEngine:
                 self.symbol, pnl_pct, self.risk_manager.trailing_stop_distance * 100
             )
             
-            # Set trailing stop
+            # Set trailing stop with CORRECT implementation
             info = self.get_symbol_info()
             if info:
-                side = self.position['side']
-                distance = self.risk_manager.trailing_stop_distance
-                
-                if side == 'Buy':
-                    trailing_stop = current_price * (1 - distance)
-                    active_price = current_price * 1.005
-                else:
-                    trailing_stop = current_price * (1 + distance)
-                    active_price = current_price * 0.995
-                
-                formatted_trailing_stop = self.format_price(info, trailing_stop)
-                formatted_active_price = self.format_price(info, active_price)
+                # Calculate absolute trailing distance (not percentage)
+                trailing_distance = current_price * self.risk_manager.trailing_stop_distance
+                formatted_trailing_distance = self.format_price(info, trailing_distance)
                 
                 resp = self.exchange.set_trading_stop(
                     category="linear",
                     symbol=self.linear,
                     positionIdx=0,
                     takeProfit="",
-                    trailingStop=formatted_trailing_stop,
-                    activePrice=formatted_active_price
+                    stopLoss="",  # Clear existing SL
+                    trailingStop=formatted_trailing_distance,  # Absolute price distance
+                    activePrice=self.format_price(info, current_price)  # Activate at current price
                 )
                 
                 if resp.get('retCode') == 0:
-                    print(f"✅ Trailing stop set: ${formatted_trailing_stop}")
+                    print(f"✅ Trailing stop set: {formatted_trailing_distance} distance")
                 else:
                     print(f"❌ Trailing stop failed: {resp.get('retMsg')}")
             
@@ -379,22 +388,33 @@ class TradeEngine:
         """Run trading cycle"""
         try:
             df = self.get_market_data()
-            if df is None:
+            if df is None or df.empty:
+                print("⚠️ No market data available")
                 return
             
             self.check_position()
             signal = self.strategy.generate_signal(df)
-            current_price = df['close'].iloc[-1]
+            
+            # Safe access to current price
+            try:
+                current_price = df['close'].iloc[-1]
+            except (IndexError, KeyError):
+                print("⚠️ Cannot get current price")
+                return
             
             # Get indicators from strategy (avoid duplicate calculation)
+            current_rsi = current_mfi = 50.0
+            current_trend = "UNKNOWN"
+            
             if len(df) >= 26:
-                df_with_indicators = self.strategy.calculate_indicators(df)
-                current_rsi = df_with_indicators['rsi'].iloc[-1]
-                current_mfi = df_with_indicators['mfi'].iloc[-1]
-                current_trend = df_with_indicators['trend'].iloc[-1]
-            else:
-                current_rsi = current_mfi = 50.0
-                current_trend = "UNKNOWN"
+                try:
+                    df_with_indicators = self.strategy.calculate_indicators(df)
+                    if df_with_indicators is not None and not df_with_indicators.empty:
+                        current_rsi = df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators.columns else 50.0
+                        current_mfi = df_with_indicators['mfi'].iloc[-1] if 'mfi' in df_with_indicators.columns else 50.0
+                        current_trend = df_with_indicators['trend'].iloc[-1] if 'trend' in df_with_indicators.columns else "UNKNOWN"
+                except Exception as e:
+                    print(f"⚠️ Indicator calculation error: {e}")
             
             # Handle cooldown
             if self.reversal_cooldown_cycles > 0:
