@@ -205,6 +205,127 @@ class TradeEngine:
         decimals = len(tick_str.split('.')[1]) if '.' in tick_str else 0
         return f"{price:.{decimals}f}"
 
+
+    async def check_profit_lock(self, current_price):
+        """FIXED: Check if profit lock should be activated"""
+        if not self.position:
+            return
+            
+        pnl_pct = self.position['unrealized_pnl_pct']
+        threshold_pct = self.risk_manager.break_even_pct * 100 * self.risk_manager.leverage
+        
+        # Debug: Show profit lock progress when profitable
+        if pnl_pct > 0 and not self.profit_lock_active:
+            print(f" [Lock: {pnl_pct:.1f}%/{threshold_pct:.0f}%]", end='')
+        
+        if not self.profit_lock_active and pnl_pct >= threshold_pct:
+            self.profit_lock_active = True
+            print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}% (threshold: {threshold_pct:.1f}%)")
+            
+            await self.notifier.profit_lock_activated(
+                self.symbol, pnl_pct, self.risk_manager.trailing_stop_distance * 100
+            )
+            
+            # CRITICAL FIX: Set trailing stop using Bybit's trailing stop order
+            info = self.get_symbol_info()
+            if info:
+                # Calculate absolute trailing distance
+                trailing_distance = current_price * self.risk_manager.trailing_stop_distance
+                formatted_trailing_distance = self.format_price(info, trailing_distance)
+                
+                # IMPORTANT: For Bybit, we need to:
+                # 1. Clear existing TP/SL first
+                # 2. Set trailing stop as absolute distance
+                
+                # Clear existing stops
+                clear_resp = self.exchange.set_trading_stop(
+                    category="linear",
+                    symbol=self.linear,
+                    positionIdx=0,
+                    takeProfit="",
+                    stopLoss=""
+                )
+                
+                # Set trailing stop with absolute distance
+                resp = self.exchange.set_trading_stop(
+                    category="linear",
+                    symbol=self.linear,
+                    positionIdx=0,
+                    trailingStop=formatted_trailing_distance,  # Absolute distance from current price
+                    activePrice=self.format_price(info, current_price * 0.9999)  # Activate immediately
+                )
+                
+                if resp.get('retCode') == 0:
+                    print(f"✅ Trailing stop set: {formatted_trailing_distance} distance (${current_price - float(formatted_trailing_distance):.6f} level)")
+                else:
+                    print(f"❌ Trailing stop failed: {resp.get('retMsg')}")
+                    
+            self.last_trailing_update = datetime.now()
+            
+        # ADDITIONAL FIX: Manual trailing stop management as backup
+        elif self.profit_lock_active:
+            # Manually track highest price reached for backup protection
+            if not hasattr(self, 'highest_price_seen'):
+                self.highest_price_seen = current_price
+            elif current_price > self.highest_price_seen:
+                self.highest_price_seen = current_price
+                
+            # Calculate manual trailing stop level
+            manual_stop_level = self.highest_price_seen * (1 - self.risk_manager.trailing_stop_distance)
+            
+            # Emergency exit if price drops below manual trailing stop
+            if current_price <= manual_stop_level:
+                print(f"\n🚨 MANUAL TRAILING STOP HIT! Price: ${current_price:.6f}, Stop: ${manual_stop_level:.6f}")
+                await self.close_position("Manual Trailing Stop")
+
+    # ALSO ADD this method to TradeEngine class:
+    def reset_profit_tracking(self):
+        """Reset profit tracking variables when position closes"""
+        self.profit_lock_active = False
+        self.highest_price_seen = None
+        self.last_trailing_update = None
+
+    # UPDATE the close_position method to call reset:
+    async def close_position(self, reason="Signal"):
+        """Close position with proper cleanup"""
+        try:
+            if not self.position:
+                return False
+            
+            side = "Sell" if self.position['side'] == "Buy" else "Buy"
+            qty = str(self.position['size'])
+            
+            print(f"\n📉 Closing position (Reason: {reason})")
+            
+            order = self.exchange.place_order(
+                category="linear",
+                symbol=self.linear,
+                side=side,
+                orderType="Market",
+                qty=qty,
+                reduceOnly=True
+            )
+            
+            if order.get('retCode') != 0:
+                return False
+            
+            pnl = self.position.get('unrealized_pnl', 0)
+            pnl_pct = self.position.get('unrealized_pnl_pct', 0)
+            
+            if reason == "Profit Protection" and pnl_pct >= self.risk_manager.profit_protection_threshold:
+                self.reversal_cooldown_cycles = 3
+            
+            await self.notifier.trade_closed(self.symbol, pnl_pct, pnl, reason)
+            
+            # CRITICAL: Reset all tracking variables
+            self.position = None
+            self.reset_profit_tracking()  # This is the new method
+            return True
+            
+        except Exception as e:
+            print(f"❌ Close error: {e}")
+            return False
+
     async def check_loss_switch(self):
         """Switch position when loss threshold reached"""
         if not self.position:
@@ -244,49 +365,7 @@ class TradeEngine:
                     self.position['size'], pnl_pct, self.position['unrealized_pnl']
                 )
 
-    async def check_profit_lock(self, current_price):
-        """Check if profit lock should be activated"""
-        if not self.position:
-            return
-            
-        pnl_pct = self.position['unrealized_pnl_pct']
-        threshold_pct = self.risk_manager.break_even_pct * 100 * self.risk_manager.leverage
-        
-        # Debug: Show profit lock progress when profitable
-        if pnl_pct > 0 and not self.profit_lock_active:
-            print(f" [Lock: {pnl_pct:.1f}%/{threshold_pct:.0f}%]", end='')
-        
-        if not self.profit_lock_active and pnl_pct >= threshold_pct:
-            self.profit_lock_active = True
-            print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}% (threshold: {threshold_pct:.1f}%)")
-            
-            await self.notifier.profit_lock_activated(
-                self.symbol, pnl_pct, self.risk_manager.trailing_stop_distance * 100
-            )
-            
-            # Set trailing stop with CORRECT implementation
-            info = self.get_symbol_info()
-            if info:
-                # Calculate absolute trailing distance (not percentage)
-                trailing_distance = current_price * self.risk_manager.trailing_stop_distance
-                formatted_trailing_distance = self.format_price(info, trailing_distance)
-                
-                resp = self.exchange.set_trading_stop(
-                    category="linear",
-                    symbol=self.linear,
-                    positionIdx=0,
-                    takeProfit="",
-                    stopLoss="",  # Clear existing SL
-                    trailingStop=formatted_trailing_distance,  # Absolute price distance
-                    activePrice=self.format_price(info, current_price)  # Activate at current price
-                )
-                
-                if resp.get('retCode') == 0:
-                    print(f"✅ Trailing stop set: {formatted_trailing_distance} distance")
-                else:
-                    print(f"❌ Trailing stop failed: {resp.get('retMsg')}")
-            
-            self.last_trailing_update = datetime.now()
+
 
     async def open_position(self, signal):
         """Open position"""
@@ -344,45 +423,8 @@ class TradeEngine:
         except Exception as e:
             print(f"❌ Position open error: {e}")
             return False
-    
-    async def close_position(self, reason="Signal"):
-        """Close position"""
-        try:
-            if not self.position:
-                return False
-            
-            side = "Sell" if self.position['side'] == "Buy" else "Buy"
-            qty = str(self.position['size'])
-            
-            print(f"\n📉 Closing position (Reason: {reason})")
-            
-            order = self.exchange.place_order(
-                category="linear",
-                symbol=self.linear,
-                side=side,
-                orderType="Market",
-                qty=qty,
-                reduceOnly=True
-            )
-            
-            if order.get('retCode') != 0:
-                return False
-            
-            pnl = self.position.get('unrealized_pnl', 0)
-            pnl_pct = self.position.get('unrealized_pnl_pct', 0)
-            
-            if reason == "Profit Protection" and pnl_pct >= self.risk_manager.profit_protection_threshold:
-                self.reversal_cooldown_cycles = 3
-            
-            await self.notifier.trade_closed(self.symbol, pnl_pct, pnl, reason)
-            
-            self.position = None
-            self.profit_lock_active = False
-            return True
-            
-        except Exception as e:
-            print(f"❌ Close error: {e}")
-            return False
+
+
 
     async def run_cycle(self):
         """Run trading cycle"""
