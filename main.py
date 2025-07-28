@@ -12,62 +12,64 @@ if project_root not in sys.path:
 
 from core.trade_engine import TradeEngine
 
-def display_risk_summary(risk_manager, strategy, balance, current_price, symbol, leverage, timeframe):
-    """Display risk management summary"""
+def display_risk_summary(engine, balance, current_price):
+    """Display risk management summary using centralized risk management"""
     print("\n📊 RISK MANAGEMENT SUMMARY")
     print("=" * 60)
     
-    # Calculate levels
-    stop_loss_long = current_price * (1 - risk_manager.stop_loss_pct)
-    stop_loss_short = current_price * (1 + risk_manager.stop_loss_pct)
-    take_profit_long = current_price * (1 + risk_manager.take_profit_pct)
-    take_profit_short = current_price * (1 - risk_manager.take_profit_pct)
-    break_even_long = current_price * (1 + risk_manager.break_even_pct)
-    break_even_short = current_price * (1 - risk_manager.break_even_pct)
-    
-    account_risk = f"{risk_manager.stop_loss_pct * risk_manager.leverage * 100:.1f}%"
-    account_reward = f"{risk_manager.take_profit_pct * risk_manager.leverage * 100:.1f}%"
-    risk_reward_ratio = f"1:{risk_manager.take_profit_pct / risk_manager.stop_loss_pct:.1f}"
+    # Get comprehensive risk summary from centralized risk manager
+    risk_summary = engine.risk_manager.get_risk_summary(balance, current_price)
     
     # Account info
-    print(f"💰 Balance: ${balance:,.2f} USDT")
-    print(f"📊 Symbol: {symbol}")
-    print(f"⚡ Leverage: {leverage}x")
-    print(f"📈 Position Size: {risk_manager.max_position_size*100:.1f}% per trade")
-    print(f"🎯 Risk per Trade: {risk_manager.risk_per_trade*100:.1f}%")
+    print(f"💰 Balance: ${risk_summary['balance']:,.2f} USDT")
+    print(f"📊 Symbol: {engine.symbol}")
+    print(f"⚡ Leverage: {risk_summary['leverage']}x")
+    print(f"📈 Position Size: {engine.risk_manager.max_position_size*100:.1f}% per trade")
+    print(f"🎯 Risk per Trade: {engine.risk_manager.risk_per_trade*100:.1f}%")
     
     print(f"\n📋 PRICE LEVELS @ ${current_price:.4f}:")
     print("-" * 40)
     
     # Long levels
     print("📈 LONG:")
-    print(f"   🛑 Stop Loss: ${stop_loss_long:.4f} ({account_risk} risk)")
-    print(f"   🎯 Take Profit: ${take_profit_long:.4f} ({account_reward} gain)")
-    print(f"   🔓 Break Even: ${break_even_long:.4f} (lock trigger)")
+    print(f"   🛑 Stop Loss: ${risk_summary['stop_loss_long']:.4f} ({engine.risk_manager.stop_loss_pct*100:.1f}% price move)")
+    print(f"   🎯 Take Profit: ${risk_summary['take_profit_long']:.4f} ({engine.risk_manager.take_profit_pct*100:.1f}% price move)")
+    print(f"   🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.1f}% account P&L")
     
     # Short levels
     print("\n📉 SHORT:")
-    print(f"   🛑 Stop Loss: ${stop_loss_short:.4f} ({account_risk} risk)")
-    print(f"   🎯 Take Profit: ${take_profit_short:.4f} ({account_reward} gain)")
-    print(f"   🔓 Break Even: ${break_even_short:.4f} (lock trigger)")
+    print(f"   🛑 Stop Loss: ${risk_summary['stop_loss_short']:.4f} ({engine.risk_manager.stop_loss_pct*100:.1f}% price move)")
+    print(f"   🎯 Take Profit: ${risk_summary['take_profit_short']:.4f} ({engine.risk_manager.take_profit_pct*100:.1f}% price move)")
+    print(f"   🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.1f}% account P&L")
     
     # Analysis
-    print(f"\n⚖️ ANALYSIS:")
+    print(f"\n⚖️ RISK ANALYSIS:")
     print("-" * 40)
-    print(f"📊 Risk/Reward: {risk_reward_ratio}")
-    print(f"🎯 Win Rate Needed: {100 / (1 + (risk_manager.take_profit_pct / risk_manager.stop_loss_pct)):.0f}%")
-    print(f"🔒 Trailing Distance: {risk_manager.trailing_stop_distance*100:.1f}%")
-    print(f"🔄 Loss Switch: {abs(risk_manager.loss_switch_threshold)*100:.0f}%")
+    print(f"📊 Position Value: ${risk_summary['notional_value']:,.2f} USDT")
+    print(f"💳 Margin Used: ${risk_summary['margin_used']:,.2f} USDT ({risk_summary['margin_pct']:.1f}%)")
+    print(f"🎯 Risk/Reward: 1:{engine.risk_manager.take_profit_pct / engine.risk_manager.stop_loss_pct:.1f}")
+    print(f"🔒 Trailing Distance: {risk_summary['trailing_distance_pct']:.1f}%")
+    print(f"🔄 Loss Switch: {engine.risk_manager.loss_switch_threshold:.0f}% account P&L")
+    print(f"💰 Profit Protection: {engine.risk_manager.profit_protection_threshold:.0f}% account P&L")
     
     # Strategy
     print(f"\n🎮 STRATEGY:")
     print("-" * 40)
-    print(f"📈 RSI Length: {strategy.params['rsi_length']}")
-    print(f"💹 MFI Length: {strategy.params['mfi_length']}")
-    print(f"🔽 Oversold: {strategy.params['oversold_level']}")
-    print(f"🔼 Overbought: {strategy.params['overbought_level']}")
-    print(f"🎯 Trend Filter: {'ON' if strategy.params.get('require_trend', False) else 'OFF'}")
-    print(f"⏱️ Timeframe: {timeframe}m")
+    print(f"📈 RSI Length: {engine.strategy.params['rsi_length']}")
+    print(f"💹 MFI Length: {engine.strategy.params['mfi_length']}")
+    print(f"🔽 Oversold: {engine.strategy.params['oversold_level']}")
+    print(f"🔼 Overbought: {engine.strategy.params['overbought_level']}")
+    print(f"🎯 Trend Filter: {'ON' if engine.strategy.params.get('require_trend', False) else 'OFF'}")
+    print(f"⏱️ Timeframe: {engine.timeframe}m")
+    
+    # Risk Thresholds Summary
+    print(f"\n🚨 RISK THRESHOLDS:")
+    print("-" * 40)
+    print(f"🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.1f}% account → Activate trailing stop")
+    print(f"💰 Profit Protection: {engine.risk_manager.profit_protection_threshold:.1f}% account → Take profit & cooldown")
+    print(f"🔄 Position Reversal: {engine.risk_manager.position_reversal_threshold:.1f}% account → Reverse on signal")
+    print(f"🚨 Loss Switch: {engine.risk_manager.loss_switch_threshold:.1f}% account → Force reverse")
+    print(f"⏸️ Cooldown: {engine.risk_manager.reversal_cooldown_cycles} cycles after profit protection")
     
     print("=" * 60)
 
@@ -92,16 +94,8 @@ async def main():
         else:
             current_price = 0.086
         
-        # Display summary
-        display_risk_summary(
-            engine.risk_manager,
-            engine.strategy,
-            balance,
-            current_price,
-            engine.symbol,
-            engine.risk_manager.leverage,
-            engine.timeframe
-        )
+        # Display summary using centralized risk management
+        display_risk_summary(engine, balance, current_price)
         
         print(f"\n🚀 LIVE TRADING STARTED")
         print("=" * 60)

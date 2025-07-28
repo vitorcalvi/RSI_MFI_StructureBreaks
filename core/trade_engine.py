@@ -95,7 +95,6 @@ class TradeEngine:
                 print(f"❌ API error: {klines.get('retMsg')}")
                 return None
             
-            # Check if result structure exists
             if not klines.get('result') or not klines['result'].get('list'):
                 print("❌ No market data in response")
                 return None
@@ -114,7 +113,6 @@ class TradeEngine:
             
             df = df.sort_index()
             
-            # Ensure we have data
             if df.empty:
                 print("❌ Empty DataFrame after processing")
                 return None
@@ -136,7 +134,7 @@ class TradeEngine:
         except Exception as e:
             print(f"❌ Balance error: {e}")
             return 0
-    
+
     def check_position(self):
         """Check current position"""
         try:
@@ -148,8 +146,10 @@ class TradeEngine:
                 if position_size > 0:
                     avg_price = float(position['avgPrice'])
                     unrealized_pnl = float(position['unrealisedPnl'])
-                    investment = (avg_price * position_size) / self.risk_manager.leverage
-                    pnl_pct = (unrealized_pnl / investment) * 100
+                    
+                    # Use centralized risk management for P&L calculation
+                    balance = self.get_account_balance()
+                    pnl_pct = self.risk_manager.calculate_account_pnl_pct(unrealized_pnl, balance)
                     
                     self.position = {
                         'side': position['side'],
@@ -211,13 +211,13 @@ class TradeEngine:
             return
             
         pnl_pct = self.position['unrealized_pnl_pct']
-        threshold_pct = self.risk_manager.loss_switch_threshold * 100
         
-        if pnl_pct <= threshold_pct:
+        # Use centralized risk management
+        if self.risk_manager.should_switch_position(pnl_pct):
             current_side = self.position['side']
             new_side = 'SELL' if current_side == 'Buy' else 'BUY'
             
-            print(f"\n⚠️ Loss threshold reached: {pnl_pct:.2f}%")
+            print(f"\n⚠️ Loss threshold reached: {pnl_pct:.2f}% (limit: {self.risk_manager.loss_switch_threshold}%)")
             print(f"🔄 Switching to {new_side}")
             
             await self.close_position("Loss Limit")
@@ -250,25 +250,23 @@ class TradeEngine:
             return
             
         pnl_pct = self.position['unrealized_pnl_pct']
-        threshold_pct = self.risk_manager.break_even_pct * 100 * self.risk_manager.leverage
         
-        # Debug: Show profit lock progress when profitable
+        # Use centralized risk management
         if pnl_pct > 0 and not self.profit_lock_active:
-            print(f" [Lock: {pnl_pct:.1f}%/{threshold_pct:.0f}%]", end='')
+            print(f" [Lock: {pnl_pct:.1f}%/{self.risk_manager.profit_lock_threshold:.1f}%]", end='')
         
-        if not self.profit_lock_active and pnl_pct >= threshold_pct:
+        if not self.profit_lock_active and self.risk_manager.should_activate_profit_lock(pnl_pct):
             self.profit_lock_active = True
-            print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}% (threshold: {threshold_pct:.1f}%)")
+            print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}% (threshold: {self.risk_manager.profit_lock_threshold:.1f}%)")
             
             await self.notifier.profit_lock_activated(
                 self.symbol, pnl_pct, self.risk_manager.trailing_stop_distance * 100
             )
             
-            # Set trailing stop with CORRECT implementation
+            # Set trailing stop using centralized calculation
             info = self.get_symbol_info()
             if info:
-                # Calculate absolute trailing distance (not percentage)
-                trailing_distance = current_price * self.risk_manager.trailing_stop_distance
+                trailing_distance = self.risk_manager.get_trailing_stop_distance_absolute(current_price)
                 formatted_trailing_distance = self.format_price(info, trailing_distance)
                 
                 resp = self.exchange.set_trading_stop(
@@ -295,6 +293,7 @@ class TradeEngine:
             ticker = self.exchange.get_tickers(category="linear", symbol=self.linear)
             current_price = float(ticker['result']['list'][0]['lastPrice'])
             
+            # Use centralized position sizing
             position_size = self.risk_manager.calculate_position_size(balance, current_price)
             info = self.get_symbol_info()
             if not info:
@@ -319,7 +318,7 @@ class TradeEngine:
             
             await asyncio.sleep(2)
             
-            # Set initial stops (TP/SL only, no trailing stop initially)
+            # Set initial stops using centralized risk management
             try:
                 if signal['action'] == 'BUY':
                     sl = self.risk_manager.get_stop_loss(current_price, 'long')
@@ -380,8 +379,9 @@ class TradeEngine:
             pnl = self.position.get('unrealized_pnl', 0)
             pnl_pct = self.position.get('unrealized_pnl_pct', 0)
             
-            if reason == "Profit Protection" and pnl_pct >= self.risk_manager.profit_protection_threshold:
-                self.reversal_cooldown_cycles = 3
+            # Use centralized risk management for cooldown logic
+            if reason == "Profit Protection" and self.risk_manager.should_take_profit_protection(pnl_pct):
+                self.reversal_cooldown_cycles = self.risk_manager.reversal_cooldown_cycles
             
             await self.notifier.trade_closed(self.symbol, pnl_pct, pnl, reason)
             
@@ -474,16 +474,17 @@ class TradeEngine:
             )
             
             if should_reverse:
-                if pnl_pct >= self.risk_manager.profit_protection_threshold:
-                    print(f"\n💰 Taking +{pnl_pct:.2f}% profit")
+                # Use centralized risk management for decision logic
+                if self.risk_manager.should_take_profit_protection(pnl_pct):
+                    print(f"\n💰 Taking +{pnl_pct:.2f}% profit (threshold: {self.risk_manager.profit_protection_threshold}%)")
                     await self.close_position("Profit Protection")
-                elif pnl_pct <= -5.0:
-                    print(f"\n🔄 Reversing losing position: {pnl_pct:.2f}%")
+                elif self.risk_manager.should_reverse_on_signal(pnl_pct):
+                    print(f"\n🔄 Reversing losing position: {pnl_pct:.2f}% (threshold: {self.risk_manager.position_reversal_threshold}%)")
                     await self.close_position("Reverse Signal")
                     await asyncio.sleep(2)
                     await self.open_position(signal)
                 else:
-                    print(f"\n⏸️ Signal ignored - P&L: {pnl_pct:.2f}%")
+                    print(f"\n⏸️ Signal ignored - P&L: {pnl_pct:.2f}% (not meeting reversal criteria)")
         else:
             if self.reversal_cooldown_cycles > 0:
                 print(f"\n⏸️ Cooldown active ({self.reversal_cooldown_cycles} cycles)")
