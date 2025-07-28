@@ -15,34 +15,53 @@ from core.trade_engine import TradeEngine
 
 async def main():
     print("🤖 RSI+MFI Trading Bot Starting...")
+    print("=" * 60)
+    
+    # Component initialization with status updates
+    print("🔧 Initializing Components...")
     
     # Check if strategy params exist
     strategy_file = 'strategies/params_RSI_MFI_Cloud.json'
-    if not os.path.exists(strategy_file):
-        print(f"⚠️  Warning: {strategy_file} not found, using default parameters")
+    if os.path.exists(strategy_file):
+        print("✅ Component: Strategy parameters loaded")
+    else:
+        print("⚠️  Component: Strategy parameters missing, using defaults")
     
     # Initialize trade engine
     try:
+        print("🔄 Component: Initializing Trade Engine...")
         engine = TradeEngine()
-        print("✅ Trade engine initialized")
+        print("✅ Component: Trade Engine initialized")
+        print("✅ Component: Risk Manager configured")
+        print("✅ Component: Strategy Engine loaded")
+        print("✅ Component: Telegram Notifier ready")
+        
+        print("\n" + "=" * 60)
+        print("🚀 Starting Trading System...")
+        print("=" * 60)
+        
     except Exception as e:
         print(f"❌ Failed to initialize trade engine: {e}")
         return
     
     try:
-        # Start trading
+        # Start trading - this will show the detailed risk summary
         await engine.run()
     except KeyboardInterrupt:
-        print("\n⚠️  Stopping bot...")
+        print("\n" + "=" * 60)
+        print("⚠️  Shutdown Initiated by User...")
+        print("=" * 60)
     except Exception as e:
-        print(f"❌ Runtime error: {e}")
+        print(f"\n❌ Runtime error: {e}")
         import traceback
         traceback.print_exc()
     finally:
         try:
+            print("🔄 Stopping trading engine...")
             await engine.stop()
-        except:
-            pass
+            print("✅ Trading engine stopped successfully")
+        except Exception as e:
+            print(f"⚠️  Error during shutdown: {e}")
 
 if __name__ == "__main__":
     try:

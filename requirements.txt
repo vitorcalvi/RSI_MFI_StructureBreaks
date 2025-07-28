@@ -30,8 +30,18 @@ aiohttp>=3.8.0
 # Performance
 numba>=0.57.0
 
-
+# Terminal Colors & Formatting
 colorama
-python-dotenv
+
+# Bybit API
 pybit
-python_telegram_bot
+
+# Ray Tune (for optimization)
+ray[tune]
+
+# VectorBT (for backtesting)
+vectorbt
+
+# Additional utilities
+asyncio-mqtt
+websockets

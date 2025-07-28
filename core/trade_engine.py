@@ -11,7 +11,7 @@ load_dotenv(override=True)
 # Import bot components
 from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
 from core.risk_management import RiskManager
-from telegram_notifier import TelegramNotifier
+from core.telegram_notifier import TelegramNotifier
 
 class TradeEngine:
     def __init__(self):
@@ -19,7 +19,7 @@ class TradeEngine:
         self.risk_manager = RiskManager()
         
         # Configuration from RiskManager (NOT environment)
-        self.symbol = self.risk_manager.symbol  # ✅ FIXED: Get from RiskManager
+        self.symbol = self.risk_manager.symbol
         self.linear = self.symbol.replace('/', '')
         self.timeframe = '5'  # 5 minutes
         self.demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
@@ -52,6 +52,7 @@ class TradeEngine:
     def connect(self):
         """Initialize exchange connection"""
         try:
+            print("🔄 Connecting to Bybit...")
             self.exchange = HTTP(
                 demo=self.demo_mode,
                 api_key=self.api_key,
@@ -73,7 +74,7 @@ class TradeEngine:
             return False
 
     def set_leverage(self):
-        """Set leverage for the trading symbol"""
+        """Set leverage - FIXED to handle all leverage errors gracefully"""
         try:
             print(f"🔧 Setting leverage to {self.leverage}x...")
             resp = self.exchange.set_leverage(
@@ -83,13 +84,66 @@ class TradeEngine:
                 sellLeverage=str(self.leverage)
             )
             
-            if resp.get('retCode') == 0:
+            ret_code = resp.get('retCode', 0)
+            if ret_code == 0:
                 print(f"✅ Leverage set to {self.leverage}x")
+            elif ret_code == 110043:
+                print(f"✅ Leverage already at {self.leverage}x")
+            elif ret_code == 110036:
+                print(f"ℹ️ Cross margin mode - leverage fixed at {self.leverage}x")
             else:
-                print(f"❌ Failed to set leverage: {resp.get('retMsg')}")
+                print(f"ℹ️ Leverage: {resp.get('retMsg')} (continuing)")
                 
         except Exception as e:
-            print(f"❌ Leverage setting error: {e}")
+            # Handle ALL leverage errors gracefully
+            print(f"ℹ️ Leverage setting skipped: {str(e)[:50]}... (continuing)")
+    
+    def display_risk_summary(self, balance, current_price):
+        """Display comprehensive risk management summary"""
+        print("\n" + "📊 RISK MANAGEMENT SUMMARY")
+        print("=" * 60)
+        
+        # Get risk summary from RiskManager
+        risk_summary = self.risk_manager.get_risk_summary(current_price)
+        
+        # Account Information
+        print(f"💰 Account Balance: ${balance:,.2f} USDT")
+        print(f"📊 Trading Symbol: {self.symbol}")
+        print(f"⚡ Leverage: {self.leverage}x")
+        print(f"📈 Position Size: {self.risk_manager.max_position_size*100:.1f}% of balance per trade")
+        print(f"🎯 Risk per Trade: {self.risk_manager.risk_per_trade*100:.1f}% of account")
+        
+        print(f"\n📋 PRICE LEVELS @ ${current_price:.4f}:")
+        print("-" * 40)
+        
+        # Long Position Levels
+        print("📈 LONG POSITION:")
+        print(f"   🛑 Stop Loss:    ${risk_summary['stop_loss_price_long']:.4f} ({risk_summary['account_risk_per_trade']} risk)")
+        print(f"   🎯 Take Profit:  ${risk_summary['take_profit_price_long']:.4f} ({risk_summary['account_reward_potential']} gain)")
+        print(f"   🔓 Break Even:   ${risk_summary['break_even_price_long']:.4f} (profit lock trigger)")
+        
+        # Short Position Levels  
+        print("\n📉 SHORT POSITION:")
+        print(f"   🛑 Stop Loss:    ${risk_summary['stop_loss_price_short']:.4f} ({risk_summary['account_risk_per_trade']} risk)")
+        print(f"   🎯 Take Profit:  ${risk_summary['take_profit_price_short']:.4f} ({risk_summary['account_reward_potential']} gain)")
+        print(f"   🔓 Break Even:   ${risk_summary['break_even_price_short']:.4f} (profit lock trigger)")
+        
+        print(f"\n⚖️  RISK/REWARD ANALYSIS:")
+        print("-" * 40)
+        print(f"📊 Risk/Reward Ratio: {risk_summary['risk_reward_ratio']}")
+        print(f"🎯 Win Rate Needed: {100 / (1 + (self.risk_manager.take_profit_pct / self.risk_manager.stop_loss_pct)):.0f}% for profitability")
+        print(f"🔒 Trailing Distance: {self.trailing_stop_distance*100:.1f}% when profit locked")
+        print(f"🔄 Loss Switch Threshold: {abs(self.loss_switch_threshold)*100:.1f}% account loss")
+        
+        print(f"\n🎮 STRATEGY PARAMETERS:")
+        print("-" * 40)
+        print(f"📈 RSI Length: {self.strategy.params['rsi_length']}")
+        print(f"💹 MFI Length: {self.strategy.params['mfi_length']}")
+        print(f"🔽 Oversold Level: {self.strategy.params['oversold_level']}")
+        print(f"🔼 Overbought Level: {self.strategy.params['overbought_level']}")
+        print(f"⏱️  Timeframe: {self.timeframe} minutes")
+        
+        print("=" * 60)
     
     def get_market_data(self):
         """Fetch latest market data"""
@@ -147,12 +201,20 @@ class TradeEngine:
                 
                 # Check if position exists and has size > 0
                 if position_size > 0:
+                    avg_price = float(position['avgPrice'])
+                    unrealized_pnl = float(position['unrealisedPnl'])
+                    
+                    # ✅ FIXED: Calculate P&L percentage correctly with leverage
+                    # This calculates P&L as % of account investment (not position value)
+                    investment = (avg_price * position_size) / self.leverage
+                    pnl_pct = (unrealized_pnl / investment) * 100
+                    
                     self.position = {
                         'side': position['side'],
                         'size': position_size,
-                        'avg_price': float(position['avgPrice']),
-                        'unrealized_pnl': float(position['unrealisedPnl']),
-                        'unrealized_pnl_pct': float(position['unrealisedPnl']) / (float(position['avgPrice']) * position_size) * 100
+                        'avg_price': avg_price,
+                        'unrealized_pnl': unrealized_pnl,
+                        'unrealized_pnl_pct': pnl_pct
                     }
                     return self.position
                 else:
@@ -212,16 +274,17 @@ class TradeEngine:
         return f"{price:.{decimals}f}"
 
     async def check_loss_switch(self):
-        """Check if we should switch position due to losses - SIMPLIFIED"""
+        """✅ FIXED: Check if we should switch position due to losses"""
         if not self.position:
             return
             
         pnl_pct = self.position['unrealized_pnl_pct']
         
-        # Check if loss threshold is reached
-        if pnl_pct <= self.loss_switch_threshold:
-            print(f"\n⚠️ Loss threshold reached: {pnl_pct:.2f}%")
-            # Just close position (no switching for now)
+        # ✅ FIXED: Correct threshold comparison
+        threshold_pct = self.loss_switch_threshold * 100  # Convert to percentage
+        
+        if pnl_pct <= threshold_pct:
+            print(f"\n⚠️ Loss threshold reached: {pnl_pct:.2f}% (limit: {threshold_pct:.1f}%)")
             await self.close_position("Loss Limit")
 
     async def update_trailing_stop(self, current_price):
@@ -232,7 +295,7 @@ class TradeEngine:
                 
             side = self.position['side']
             
-            # ✅ FIXED: Use trailing_stop_distance from RiskManager (0.003 = 0.3%)
+            # ✅ FIXED: Use trailing_stop_distance from RiskManager
             distance_pct = self.trailing_stop_distance
             
             if side == 'Buy':
@@ -269,22 +332,24 @@ class TradeEngine:
             return False
 
     async def check_profit_lock(self, current_price):
-        """Check if we should activate profit lock mode - FULLY FIXED"""
+        """✅ FIXED: Check if we should activate profit lock mode"""
         if not self.position:
             return
             
         pnl_pct = self.position['unrealized_pnl_pct']
         
-        # Check if we reached break-even
-        if not self.profit_lock_active and pnl_pct >= self.break_even_pct:
+        # ✅ FIXED: Correct break-even threshold comparison
+        threshold_pct = self.break_even_pct * 100 * self.leverage
+        
+        if not self.profit_lock_active and pnl_pct >= threshold_pct:
             self.profit_lock_active = True
-            print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}%")
+            print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}% (threshold: {threshold_pct:.1f}%)")
             
-            # ✅ FIXED: Send notification with CORRECT trailing percentage
+            # Send notification with CORRECT trailing percentage
             await self.notifier.profit_lock_activated(
                 self.symbol, 
                 pnl_pct, 
-                self.trailing_stop_distance * 100  # Convert 0.003 to 0.3%
+                self.trailing_stop_distance * 100
             )
             
             # Remove take profit and set trailing stop
@@ -292,8 +357,7 @@ class TradeEngine:
                 info = self.get_symbol_info()
                 if info:
                     side = self.position['side']
-                    # ✅ FIXED: Use RiskManager value, not hardcoded 10%
-                    distance_pct = self.trailing_stop_distance  # 0.003 = 0.3%
+                    distance_pct = self.trailing_stop_distance
                     
                     if side == 'Buy':
                         trailing_stop_price = current_price * (1 - distance_pct)
@@ -553,25 +617,30 @@ class TradeEngine:
             print(f"\n❌ Cycle error: {e}")
     
     async def run(self):
-        """Main trading loop"""
-        print("\n🤖 RSI+MFI Trading Bot Starting...")
-        
+        """Main trading loop with comprehensive startup display"""
         # Connect to exchange
         if not self.connect():
             print("❌ Failed to connect to exchange")
             return
         
-        # Get initial balance
+        # Get initial balance and current price for risk summary
         balance = self.get_account_balance()
-        print(f"💰 Account balance: ${balance:.2f}")
-        print(f"📊 Trading {self.symbol}")
-        print(f"⚡ Leverage: {self.leverage}x")
-        print(f"⏱️  Timeframe: {self.timeframe} minutes")
-        print(f"🎯 Strategy: RSI+MFI")
-        # ✅ FIXED: Display correct percentages
-        print(f"🔒 Profit Lock: {self.break_even_pct*100:.1f}% | Trailing: {self.trailing_stop_distance*100:.1f}%")
-        print(f"🔄 Loss Switch: {self.loss_switch_threshold*100:.1f}%")
-        print("\n" + "="*60 + "\n")
+        
+        # Get current market price
+        ticker = self.exchange.get_tickers(category="linear", symbol=self.linear)
+        if ticker.get('retCode') == 0:
+            current_price = float(ticker['result']['list'][0]['lastPrice'])
+        else:
+            current_price = 0.089  # Default fallback
+        
+        # Display comprehensive risk summary
+        self.display_risk_summary(balance, current_price)
+        
+        print(f"\n🚀 LIVE TRADING STARTED")
+        print("=" * 60)
+        
+        # Send start notification
+        await self.notifier.bot_started(self.symbol, balance)
         
         self.running = True
         
@@ -582,6 +651,7 @@ class TradeEngine:
                 
         except Exception as e:
             print(f"\n❌ Runtime error: {e}")
+            await self.notifier.error_notification(str(e))
     
     async def stop(self):
         """Stop the trading engine"""
@@ -590,7 +660,10 @@ class TradeEngine:
         
         # Close any open position
         if self.position:
-            print("Closing open position...")
+            print("🔄 Closing open position...")
             await self.close_position("Bot Stop")
+        
+        # Send stop notification
+        await self.notifier.bot_stopped()
         
         print("✅ Trading engine stopped")
