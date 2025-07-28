@@ -11,134 +11,18 @@ load_dotenv(override=True)
 # Import bot components
 from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
 from core.risk_management import RiskManager
-import asyncio
-from telegram import Bot
-
-class TelegramNotifier:
-    def __init__(self):
-        self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-        self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        self.enabled = bool(self.bot_token and self.chat_id)
-        self.position_start_time = None
-        if self.enabled:
-            self.bot = Bot(token=self.bot_token)
-    
-    async def send_message(self, message):
-        if not self.enabled:
-            return
-        try:
-            await self.bot.send_message(chat_id=self.chat_id, text=message)
-        except Exception as e:
-            print(f"Telegram error: {e}")
-    
-    async def trade_opened(self, symbol, price, size, side, potential_gain=None, potential_loss=None):
-        self.position_start_time = datetime.now()
-        position_value = size * price
-        
-        # Position direction emoji
-        direction_emoji = "📈" if side == "Buy" else "📉"
-        
-        message = (
-            f"🔔 {direction_emoji} OPENED {symbol}\n"
-            f"📍 Direction: {side.upper()}\n"
-            f"⏰ {self.position_start_time.strftime('%H:%M:%S')}\n"
-            f"💰 Price: ${price:.4f}\n"
-            f"📊 Size: {size}\n"
-            f"💵 Value: ${position_value:.2f} USDT"
-        )
-        
-        if potential_gain is not None:
-            message += f"\n🎯 Target Profit: ${potential_gain:.2f}"
-        if potential_loss is not None:
-            message += f"\n🛡️ Max Loss: ${potential_loss:.2f}"
-            
-        await self.send_message(message)
-    
-    async def trade_closed(self, symbol, pnl_pct, pnl_usd, reason="Signal"):
-        close_time = datetime.now()
-        duration_str = "N/A"
-        earn_per_hour = 0
-        
-        if self.position_start_time:
-            total_minutes = (close_time - self.position_start_time).total_seconds() / 60
-            duration_str = f"{int(total_minutes)}m" if total_minutes < 60 else f"{int(total_minutes // 60)}h {int(total_minutes % 60)}m"
-            if total_minutes > 0:
-                earn_per_hour = (pnl_usd * 60) / total_minutes
-        
-        # Profit/Loss status
-        is_profit = pnl_pct > 0
-        status_emoji = "✅ 💰" if is_profit else "❌ 📉"
-        profit_status = "PROFIT" if is_profit else "LOSS"
-        
-        # Reason icons
-        reason_icons = {
-            "Signal": "🎯",
-            "Reverse Signal": "🔄", 
-            "Loss Limit": "🚨",
-            "Bot Stop": "⏹️",
-            "Take Profit": "💰",
-            "Stop Loss": "🛡️",
-            "Trailing Stop": "🔒"
-        }
-        
-        icon = reason_icons.get(reason, "📝")
-        
-        message = (
-            f"{status_emoji} CLOSED {symbol} - {profit_status}\n"
-            f"{icon} Reason: {reason}\n"
-            f"⏰ Closed: {close_time.strftime('%H:%M:%S')}\n"
-            f"⏱️ Duration: {duration_str}\n"
-            f"📈 P&L: {pnl_pct:+.2f}%\n"
-            f"💵 Amount: ${pnl_usd:+.2f} USDT\n"
-            f"📊 Rate: ${earn_per_hour:+.2f}/hour"
-        )
-        await self.send_message(message)
-    
-    async def profit_lock_activated(self, symbol, pnl_pct, trailing_pct):
-        message = (
-            f"🔒 💎 PROFIT LOCK ACTIVATED!\n"
-            f"📊 Symbol: {symbol}\n"
-            f"📈 Current P&L: +{pnl_pct:.2f}%\n"
-            f"🎯 Trailing Stop: {trailing_pct}%\n"
-            f"💰 Protecting Profits Now!\n"
-            f"⏰ {datetime.now().strftime('%H:%M:%S')}"
-        )
-        await self.send_message(message)
-    
-    async def position_switched(self, symbol, from_side, to_side, size, pnl_pct, pnl_usd):
-        """Notify when position is switched due to losses"""
-        switch_time = datetime.now()
-        
-        message = (
-            f"🔄 ⚡ POSITION SWITCHED!\n"
-            f"📊 Symbol: {symbol}\n"
-            f"🔀 From: {from_side} → {to_side}\n"
-            f"📈 Size: {size}\n"
-            f"📉 Loss Cut: {pnl_pct:.2f}% (${pnl_usd:.2f})\n"
-            f"🎯 New Direction: {to_side.upper()}\n"
-            f"⏰ {switch_time.strftime('%H:%M:%S')}"
-        )
-        await self.send_message(message)
-    
-    async def trailing_stop_updated(self, symbol, new_stop, current_price):
-        message = (
-            f"🔄 🔒 TRAILING UPDATED\n"
-            f"📊 {symbol}\n"
-            f"🎯 New Stop: ${new_stop:.4f}\n"
-            f"💰 Current: ${current_price:.4f}\n"
-            f"⏰ {datetime.now().strftime('%H:%M:%S')}"
-        )
-        await self.send_message(message)
-
+from telegram_notifier import TelegramNotifier
 
 class TradeEngine:
     def __init__(self):
-        # Configuration
-        self.symbol = os.getenv('SYMBOLS')
+        # Components - Initialize RiskManager FIRST
+        self.risk_manager = RiskManager()
+        
+        # Configuration from RiskManager (NOT environment)
+        self.symbol = self.risk_manager.symbol  # ✅ FIXED: Get from RiskManager
         self.linear = self.symbol.replace('/', '')
         self.timeframe = '5'  # 5 minutes
         self.demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
-        self.leverage = int(os.getenv('LEVERAGE'))  # Set leverage from env or default to 10x
         
         # API credentials
         if self.demo_mode:
@@ -148,24 +32,22 @@ class TradeEngine:
             self.api_key = os.getenv('LIVE_BYBIT_API_KEY')
             self.api_secret = os.getenv('LIVE_BYBIT_API_SECRET')
         
-        # Components
+        # Other components
         self.exchange = None
         self.strategy = RSIMFICloudStrategy()
-        self.risk_manager = RiskManager()
         self.notifier = TelegramNotifier()
         
-        # State
+        # Get ALL risk settings from RiskManager
+        self.leverage = self.risk_manager.leverage
+        self.break_even_pct = self.risk_manager.break_even_pct
+        self.trailing_stop_distance = self.risk_manager.trailing_stop_distance
+        self.loss_switch_threshold = self.risk_manager.loss_switch_threshold
+        
+        # State variables (not configuration)
         self.running = False
         self.position = None
         self.last_signal_time = None
-        
-        # Profit Locker - Fixed minimum threshold
-        self.break_even_pct = 0.5  # 0.5% minimum for Bybit trailing stop
         self.profit_lock_active = False
-        self.trailing_stop_distance = 1.0  # 1.0% trailing stop distance (minimum for Bybit)
-        
-        # Position switching for losses
-        self.loss_switch_threshold = -1.2  # Switch position at -2% loss
         
     def connect(self):
         """Initialize exchange connection"""
@@ -329,46 +211,9 @@ class TradeEngine:
         decimals = len(tick_str.split('.')[1]) if '.' in tick_str else 0
         return f"{price:.{decimals}f}"
 
-    async def switch_position_mode(self):
-        """Switch position using Bybit's position mode API"""
-        try:
-            if not self.position:
-                return False
-                
-            current_side = self.position['side']
-            size = self.position['size']
-            
-            # Determine new side
-            new_side = "Sell" if current_side == "Buy" else "Buy"
-            
-            print(f"\n🔄 Switching position: {current_side} -> {new_side}")
-            
-            # Use Bybit's position switch API
-            switch_resp = self.exchange.switch_position_mode(
-                category="linear",
-                symbol=self.linear,
-                coin="USDT",
-                mode=1  # Switch to opposite side
-            )
-            
-            if switch_resp.get('retCode') == 0:
-                print(f"✅ Position switched successfully")
-                
-                # Wait for position update
-                await asyncio.sleep(2)
-                
-                return True
-            else:
-                print(f"❌ Position switch failed: {switch_resp.get('retMsg')}")
-                return False
-                
-        except Exception as e:
-            print(f"❌ Position switch error: {e}")
-            return False
-
     async def check_loss_switch(self):
-        """Check if we should switch position due to losses"""
-        if not self.position or self.profit_lock_active:
+        """Check if we should switch position due to losses - SIMPLIFIED"""
+        if not self.position:
             return
             
         pnl_pct = self.position['unrealized_pnl_pct']
@@ -376,39 +221,19 @@ class TradeEngine:
         # Check if loss threshold is reached
         if pnl_pct <= self.loss_switch_threshold:
             print(f"\n⚠️ Loss threshold reached: {pnl_pct:.2f}%")
-            
-            current_side = self.position['side']
-            size = self.position['size']
-            
-            # Try to switch position
-            switch_success = await self.switch_position_mode()
-            
-            if not switch_success:
-                # Fallback: close position if switch fails
-                print("🚨 Switch failed, closing position")
-                await self.close_position("Loss Limit")
-            else:
-                # Notify about successful switch
-                await self.notifier.position_switched(
-                    self.symbol,
-                    current_side,
-                    "Sell" if current_side == "Buy" else "Buy", 
-                    size,
-                    pnl_pct,
-                    self.position.get('unrealized_pnl', 0)
-                )
-
+            # Just close position (no switching for now)
+            await self.close_position("Loss Limit")
 
     async def update_trailing_stop(self, current_price):
-        """Update trailing stop loss - FIXED for Bybit 10% minimum requirement"""
+        """Update trailing stop loss - FIXED to use RiskManager values"""
         try:
             if not self.position or not self.profit_lock_active:
                 return False
                 
             side = self.position['side']
             
-            # FIXED: Bybit requires minimum 10% trailing distance
-            distance_pct = 0.10  # 10% minimum trailing distance
+            # ✅ FIXED: Use trailing_stop_distance from RiskManager (0.003 = 0.3%)
+            distance_pct = self.trailing_stop_distance
             
             if side == 'Buy':
                 # For long: trailing stop below current price
@@ -444,7 +269,7 @@ class TradeEngine:
             return False
 
     async def check_profit_lock(self, current_price):
-        """Check if we should activate profit lock mode - FIXED VERSION"""
+        """Check if we should activate profit lock mode - FULLY FIXED"""
         if not self.position:
             return
             
@@ -455,11 +280,11 @@ class TradeEngine:
             self.profit_lock_active = True
             print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}%")
             
-            # Send notification
+            # ✅ FIXED: Send notification with CORRECT trailing percentage
             await self.notifier.profit_lock_activated(
                 self.symbol, 
                 pnl_pct, 
-                10.0  # FIXED: Use 10% for notification
+                self.trailing_stop_distance * 100  # Convert 0.003 to 0.3%
             )
             
             # Remove take profit and set trailing stop
@@ -467,7 +292,8 @@ class TradeEngine:
                 info = self.get_symbol_info()
                 if info:
                     side = self.position['side']
-                    distance_pct = 0.10  # FIXED: 10% minimum distance
+                    # ✅ FIXED: Use RiskManager value, not hardcoded 10%
+                    distance_pct = self.trailing_stop_distance  # 0.003 = 0.3%
                     
                     if side == 'Buy':
                         trailing_stop_price = current_price * (1 - distance_pct)
@@ -516,8 +342,6 @@ class TradeEngine:
                     print(f"🔒 Trailing updated")
                     self.last_trailing_update = current_time
 
-
-                    
     async def open_position(self, signal):
         """Open a new position based on signal"""
         try:
@@ -727,7 +551,6 @@ class TradeEngine:
             
         except Exception as e:
             print(f"\n❌ Cycle error: {e}")
-
     
     async def run(self):
         """Main trading loop"""
@@ -745,8 +568,9 @@ class TradeEngine:
         print(f"⚡ Leverage: {self.leverage}x")
         print(f"⏱️  Timeframe: {self.timeframe} minutes")
         print(f"🎯 Strategy: RSI+MFI")
-        print(f"🔒 Profit Lock: {self.break_even_pct}% | Trailing: {self.trailing_stop_distance}%")
-        print(f"🔄 Loss Switch: {self.loss_switch_threshold}%")
+        # ✅ FIXED: Display correct percentages
+        print(f"🔒 Profit Lock: {self.break_even_pct*100:.1f}% | Trailing: {self.trailing_stop_distance*100:.1f}%")
+        print(f"🔄 Loss Switch: {self.loss_switch_threshold*100:.1f}%")
         print("\n" + "="*60 + "\n")
         
         self.running = True
