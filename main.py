@@ -14,60 +14,32 @@ if project_root not in sys.path:
 from core.trade_engine import TradeEngine
 
 async def main():
-    print("🤖 RSI+MFI Trading Bot Starting...")
+    print("🤖 ZORA Trading Bot Starting...")
     print("=" * 60)
     
-    # Component initialization with status updates
-    print("🔧 Initializing Components...")
-    
-    # Check if strategy params exist
-    strategy_file = 'strategies/params_RSI_MFI_Cloud.json'
-    if os.path.exists(strategy_file):
-        print("✅ Component: Strategy parameters loaded")
-    else:
-        print("⚠️  Component: Strategy parameters missing, using defaults")
-    
-    # Initialize trade engine
     try:
-        print("🔄 Component: Initializing Trade Engine...")
+        # Initialize and start trading
         engine = TradeEngine()
-        print("✅ Component: Trade Engine initialized")
-        print("✅ Component: Risk Manager configured")
-        print("✅ Component: Strategy Engine loaded")
-        print("✅ Component: Telegram Notifier ready")
-        
-        print("\n" + "=" * 60)
-        print("🚀 Starting Trading System...")
-        print("=" * 60)
-        
-    except Exception as e:
-        print(f"❌ Failed to initialize trade engine: {e}")
-        return
-    
-    try:
-        # Start trading - this will show the detailed risk summary
         await engine.run()
+        
     except KeyboardInterrupt:
-        print("\n" + "=" * 60)
-        print("⚠️  Shutdown Initiated by User...")
-        print("=" * 60)
+        print("\n⚠️  Shutdown by user...")
+        
     except Exception as e:
-        print(f"\n❌ Runtime error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"\n❌ Error: {e}")
+        
     finally:
         try:
-            print("🔄 Stopping trading engine...")
             await engine.stop()
-            print("✅ Trading engine stopped successfully")
-        except Exception as e:
-            print(f"⚠️  Error during shutdown: {e}")
+            print("✅ Bot stopped")
+        except:
+            pass
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n👋 Bot stopped by user")
+        print("\n👋 Done")
     except Exception as e:
-        print(f"❌ Fatal error: {e}")
+        print(f"❌ Fatal: {e}")
         sys.exit(1)

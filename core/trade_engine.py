@@ -49,10 +49,14 @@ class TradeEngine:
         self.last_signal_time = None
         self.profit_lock_active = False
         
+        # FIXED: Add reversal control
+        self.last_profit_taken_time = None
+        self.reversal_cooldown_cycles = 0
+        
     def connect(self):
         """Initialize exchange connection"""
         try:
-            print("🔄 Connecting to Bybit...")
+            print("✅ Connecting to Bybit...")
             self.exchange = HTTP(
                 demo=self.demo_mode,
                 api_key=self.api_key,
@@ -133,7 +137,7 @@ class TradeEngine:
         print(f"📊 Risk/Reward Ratio: {risk_summary['risk_reward_ratio']}")
         print(f"🎯 Win Rate Needed: {100 / (1 + (self.risk_manager.take_profit_pct / self.risk_manager.stop_loss_pct)):.0f}% for profitability")
         print(f"🔒 Trailing Distance: {self.trailing_stop_distance*100:.1f}% when profit locked")
-        print(f"🔄 Loss Switch Threshold: {abs(self.loss_switch_threshold)*100:.1f}% account loss")
+        print(f"🔄 Loss Switch Threshold: {abs(self.loss_switch_threshold)*100:.0f}% account loss")
         
         print(f"\n🎮 STRATEGY PARAMETERS:")
         print("-" * 40)
@@ -141,6 +145,7 @@ class TradeEngine:
         print(f"💹 MFI Length: {self.strategy.params['mfi_length']}")
         print(f"🔽 Oversold Level: {self.strategy.params['oversold_level']}")
         print(f"🔼 Overbought Level: {self.strategy.params['overbought_level']}")
+        print(f"🎯 Trend Filter: {'ENABLED' if self.strategy.params.get('require_trend', False) else 'DISABLED'}")
         print(f"⏱️  Timeframe: {self.timeframe} minutes")
         
         print("=" * 60)
@@ -274,18 +279,67 @@ class TradeEngine:
         return f"{price:.{decimals}f}"
 
     async def check_loss_switch(self):
-        """✅ FIXED: Check if we should switch position due to losses"""
+        """✅ FIXED: Switch position direction when loss threshold is reached"""
         if not self.position:
             return
             
         pnl_pct = self.position['unrealized_pnl_pct']
         
-        # ✅ FIXED: Correct threshold comparison
+        # Use the correct threshold from risk manager
         threshold_pct = self.loss_switch_threshold * 100  # Convert to percentage
         
         if pnl_pct <= threshold_pct:
-            print(f"\n⚠️ Loss threshold reached: {pnl_pct:.2f}% (limit: {threshold_pct:.1f}%)")
+            current_side = self.position['side']
+            current_size = self.position['size']
+            current_pnl = self.position['unrealized_pnl']
+            
+            print(f"\n⚠️ Loss threshold reached: {pnl_pct:.2f}% (limit: {threshold_pct:.0f}%)")
+            print(f"🔄 Switching from {current_side} to {'Sell' if current_side == 'Buy' else 'Buy'}")
+            
+            # Determine new direction
+            new_side = 'SELL' if current_side == 'Buy' else 'BUY'
+            
+            # Close current position
             await self.close_position("Loss Limit")
+            
+            # Wait a moment for the close to complete
+            await asyncio.sleep(2)
+            
+            # Create signal for opposite direction
+            try:
+                ticker = self.exchange.get_tickers(category="linear", symbol=self.linear)
+                current_price = float(ticker['result']['list'][0]['lastPrice'])
+                
+                switch_signal = {
+                    'action': new_side,
+                    'price': current_price,
+                    'rsi': 50,  # Neutral values since this is a loss-based switch
+                    'mfi': 50,
+                    'trend': 'LOSS_SWITCH',
+                    'timestamp': pd.Timestamp.now(),
+                    'confidence': 'LOSS_SWITCH'
+                }
+                
+                # Open opposite position
+                success = await self.open_position(switch_signal)
+                
+                if success:
+                    # Send switch notification
+                    await self.notifier.position_switched(
+                        self.symbol, 
+                        current_side, 
+                        new_side,
+                        current_size,
+                        pnl_pct, 
+                        current_pnl
+                    )
+                    print(f"✅ Position switched to {new_side}")
+                else:
+                    print(f"❌ Failed to switch position to {new_side}")
+                    
+            except Exception as e:
+                print(f"❌ Position switch error: {e}")
+                await self.notifier.error_notification(f"Position switch failed: {e}")
 
     async def update_trailing_stop(self, current_price):
         """Update trailing stop loss - FIXED to use RiskManager values"""
@@ -514,6 +568,11 @@ class TradeEngine:
             pnl = self.position.get('unrealized_pnl', 0)
             pnl_pct = self.position.get('unrealized_pnl_pct', 0)
             
+            # FIXED: Record profit taking time for cooldown
+            if reason == "Profit Protection" and pnl_pct >= self.risk_manager.profit_protection_threshold:
+                self.last_profit_taken_time = datetime.now()
+                self.reversal_cooldown_cycles = 3  # 3 cycles cooldown
+            
             # Send notification with reason
             await self.notifier.trade_closed(self.symbol, pnl_pct, pnl, reason)
             
@@ -527,7 +586,7 @@ class TradeEngine:
             return False
 
     async def run_cycle(self):
-        """Run one trading cycle"""
+        """Run one trading cycle - ENHANCED with trend display"""
         try:
             # Get market data
             df = self.get_market_data()
@@ -544,7 +603,13 @@ class TradeEngine:
             # Get current values
             current_price = df['close'].iloc[-1]
             
-            # Calculate RSI and MFI directly
+            # ENHANCED: Get trend information from strategy
+            current_trend = "UNKNOWN"
+            if len(df) >= 26:  # Ensure enough data for trend calculation
+                df_with_indicators = self.strategy.calculate_indicators(df)
+                current_trend = df_with_indicators['trend'].iloc[-1]
+            
+            # Calculate RSI and MFI directly for display
             try:
                 # RSI calculation
                 delta = df['close'].diff()
@@ -566,13 +631,24 @@ class TradeEngine:
                 current_rsi = 0.0
                 current_mfi = 0.0
             
+            # FIXED: Handle reversal cooldown
+            if self.reversal_cooldown_cycles > 0:
+                self.reversal_cooldown_cycles -= 1
+                if self.reversal_cooldown_cycles == 0:
+                    print(f"\n🔓 Reversal cooldown ended - ready for new signals")
+            
             # Check profit lock if we have a position
             if self.position:
                 await self.check_profit_lock(current_price)
                 await self.check_loss_switch()  # Check for loss switching
             
-            # Log current state
+            # ENHANCED: Log current state with trend information
             position_info = 'None'
+            cooldown_info = ''
+            trend_emoji = {"UP": "🟢", "DOWN": "🔴", "SIDEWAYS": "🟡", "UNKNOWN": "⚪"}.get(current_trend, "⚪")
+            
+            if self.reversal_cooldown_cycles > 0:
+                cooldown_info = f' [Cooldown: {self.reversal_cooldown_cycles}]'
             if self.position:
                 pnl_pct = self.position['unrealized_pnl_pct']
                 lock_status = '🔒' if self.profit_lock_active else ''
@@ -582,16 +658,19 @@ class TradeEngine:
                 f"Price: ${current_price:.4f} | "
                 f"RSI: {current_rsi:.1f} | "
                 f"MFI: {current_mfi:.1f} | "
-                f"Position: {position_info}", 
+                f"Trend: {trend_emoji}{current_trend} | "
+                f"Position: {position_info}{cooldown_info}", 
                 end='', flush=True)
             
-            # Handle signals 
+            # ENHANCED: Handle signals with trend information display
             if signal:
                 signal_action = signal['action']
+                signal_trend = signal.get('trend', 'UNKNOWN')
                 
                 # Check if we have a position
                 if self.position:
                     current_side = self.position['side']
+                    pnl_pct = self.position['unrealized_pnl_pct']
                     
                     # Check for opposite signal (position reversal)
                     should_reverse = (
@@ -600,16 +679,32 @@ class TradeEngine:
                     )
                     
                     if should_reverse:
-                        print(f"\n🔄 Reversing position: {current_side} -> {signal_action}")
-                        await self.close_position("Reverse Signal")
-                        await asyncio.sleep(2)
-                        await self.open_position(signal)
-                    # If same direction signal, ignore (already in position)
+                        # FIXED: PROFIT PROTECTION - Don't reverse profitable positions
+                        if pnl_pct >= self.risk_manager.profit_protection_threshold:
+                            print(f"\n💰 Taking +{pnl_pct:.2f}% profit - no reversal")
+                            await self.close_position("Profit Protection")
+                            return  # Skip reversal
+                        
+                        # FIXED: Only reverse losing positions (< -5% account loss)
+                        elif pnl_pct <= -5.0:
+                            print(f"\n🔄 Reversing losing position: {current_side} -> {signal_action} (Loss: {pnl_pct:.2f}%)")
+                            await self.close_position("Reverse Signal")
+                            await asyncio.sleep(2)
+                            await self.open_position(signal)
+                        else:
+                            print(f"\n⏸️  Signal ignored - position P&L: {pnl_pct:.2f}% (not profitable enough to take, not losing enough to reverse)")
+                        # If same direction signal, ignore (already in position)
                     
                 else:
-                    # No position, open new one
-                    print(f"\n🎯 Signal: {signal_action} @ ${signal['price']:.4f}")
-                    await self.open_position(signal)
+                    # No position case
+                    # FIXED: Check reversal cooldown
+                    if self.reversal_cooldown_cycles > 0:
+                        print(f"\n⏸️  Signal ignored - reversal cooldown active ({self.reversal_cooldown_cycles} cycles left)")
+                    else:
+                        # ENHANCED: Open new position with trend information
+                        trend_info = f" (Trend: {signal_trend})" if signal_trend != 'UNKNOWN' else ""
+                        print(f"\n🎯 Signal: {signal_action} @ ${signal['price']:.4f}{trend_info}")
+                        await self.open_position(signal)
                 
                 self.last_signal_time = datetime.now()
             
@@ -631,7 +726,7 @@ class TradeEngine:
         if ticker.get('retCode') == 0:
             current_price = float(ticker['result']['list'][0]['lastPrice'])
         else:
-            current_price = 0.089  # Default fallback
+            current_price = 0.086  # Updated default fallback for ZORA
         
         # Display comprehensive risk summary
         self.display_risk_summary(balance, current_price)
