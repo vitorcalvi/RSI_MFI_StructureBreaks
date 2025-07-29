@@ -12,27 +12,30 @@ if project_root not in sys.path:
 
 from core.trade_engine import TradeEngine
 
-def display_accurate_info(engine, balance, current_price):
+def display_accurate_info(engine, total_equity, current_price):
     """Display ACCURATE risk management info - NO MISLEADING DATA"""
     
-    # Get actual risk calculations
-    risk_summary = engine.risk_manager.get_risk_summary(balance, current_price)
+    # Get wallet balance for position sizing calculations
+    wallet_balance = engine.get_wallet_balance_only()
     
-    print(f"💰 Balance: ${balance:,.2f} | Symbol: {engine.symbol}")
-    print(f"⚙️ Leverage: {engine.risk_manager.leverage}x | Position: {engine.risk_manager.max_position_size*100:.1f}% of balance")
+    # Get actual risk calculations using wallet balance for position sizing
+    risk_summary = engine.risk_manager.get_risk_summary(wallet_balance, current_price)
+    
+    print(f"💰 Total Equity: ${total_equity:,.2f} | Wallet: ${wallet_balance:,.2f} | Symbol: {engine.symbol}")
+    print(f"⚙️ Leverage: {engine.risk_manager.leverage}x | Position: {engine.risk_manager.max_position_size*100:.1f}% of wallet")
     
     print(f"\n🚨 ACTUAL RISK PER TRADE:")
-    print(f"💸 Max Account Loss: ${risk_summary['max_account_loss']:.2f} ({risk_summary['actual_account_risk_pct']:.1f}% of balance)")
-    print(f"📊 Margin Used: ${risk_summary['margin_used']:.2f} ({(risk_summary['margin_used']/balance)*100:.1f}% of balance)")
+    print(f"💸 Max Account Loss: ${risk_summary['max_account_loss']:.2f} ({risk_summary['actual_account_risk_pct']:.1f}% of wallet)")
+    print(f"📊 Margin Used: ${risk_summary['margin_used']:.2f} ({(risk_summary['margin_used']/wallet_balance)*100:.1f}% of wallet)")
     print(f"🎯 Notional Value: ${risk_summary['notional_value']:.2f}")
     
     print(f"\n🔒 PROFIT MANAGEMENT (NO TAKE PROFIT - HOLD UNTIL SIGNAL):")
-    print(f"🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.1f}% account → Trailing stop")
-    print(f"💰 Profit Protection: {engine.risk_manager.profit_protection_threshold:.1f}% account → Close position")
+    print(f"🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.1f}% of total equity → Trailing stop")
+    print(f"💰 Profit Protection: {engine.risk_manager.profit_protection_threshold:.1f}% of total equity → Close position")
     
     print(f"\n🔄 REVERSAL LOGIC:")
-    print(f"📈 Profit Reversal: +{engine.risk_manager.profit_reversal_threshold:.1f}% account")
-    print(f"📉 Loss Reversal: {engine.risk_manager.loss_reversal_threshold:.1f}% account")
+    print(f"📈 Profit Reversal: +{engine.risk_manager.profit_reversal_threshold:.1f}% of total equity")
+    print(f"📉 Loss Reversal: {engine.risk_manager.loss_reversal_threshold:.1f}% of total equity")
     
     print(f"\n🎮 STRATEGY PARAMETERS:")
     print(f"📈 RSI: {engine.strategy.params['oversold_level']}/{engine.strategy.params['overbought_level']} (Length: {engine.strategy.params['rsi_length']})")
@@ -51,13 +54,13 @@ async def main():
             print("❌ Connection failed")
             return
         
-        # Get current data
-        balance = engine.get_account_balance()
+        # Get current data - use total equity for P&L calculations
+        total_equity = engine.get_account_balance()  # This now returns totalEquity
         ticker = engine.exchange.get_tickers(category="linear", symbol=engine.linear)
         current_price = float(ticker['result']['list'][0]['lastPrice']) if ticker.get('retCode') == 0 else 0.086
         
         # Display accurate information
-        display_accurate_info(engine, balance, current_price)
+        display_accurate_info(engine, total_equity, current_price)
         
         # Trading mode
         mode = "TESTNET" if engine.demo_mode else "🚨 LIVE"
@@ -70,7 +73,7 @@ async def main():
             print("🚨 LIVE TRADING ACTIVE - REAL MONEY AT RISK")
             print("=" * 60)
         
-        await engine.notifier.bot_started(engine.symbol, balance)
+        await engine.notifier.bot_started(engine.symbol, total_equity)
         await engine.run()
         
     except KeyboardInterrupt:

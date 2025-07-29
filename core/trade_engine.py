@@ -136,7 +136,20 @@ class TradeEngine:
             return None
     
     def get_account_balance(self):
-        """Get USDT balance"""
+        """Get USDT total equity (includes unrealized P&L)"""
+        try:
+            resp = self.exchange.get_wallet_balance(accountType="UNIFIED")
+            if resp.get('retCode') == 0 and resp.get('result', {}).get('list'):
+                # totalEquity is at account level, not coin level
+                account_data = resp['result']['list'][0]
+                return float(account_data.get('totalEquity', 0))
+            return 0
+        except Exception as e:
+            print(f"❌ Balance error: {e}")
+            return 0
+
+    def get_wallet_balance_only(self):
+        """Get USDT wallet balance (cash only, for position sizing)"""
         try:
             resp = self.exchange.get_wallet_balance(accountType="UNIFIED")
             if resp.get('retCode') == 0:
@@ -145,7 +158,7 @@ class TradeEngine:
                         return float(coin.get('walletBalance', 0))
             return 0
         except Exception as e:
-            print(f"❌ Balance error: {e}")
+            print(f"❌ Wallet balance error: {e}")
             return 0
 
     def check_position(self):
@@ -174,8 +187,9 @@ class TradeEngine:
         avg_price = float(position['avgPrice'])
         unrealized_pnl = float(position['unrealisedPnl'])
         
-        balance = self.get_account_balance()
-        pnl_pct = self.risk_manager.calculate_account_pnl_pct(unrealized_pnl, balance)
+        # Use total equity for P&L calculation
+        total_equity = self.get_account_balance()
+        pnl_pct = self.risk_manager.calculate_account_pnl_pct(unrealized_pnl, total_equity)
         
         self.position = {
             'side': position['side'],
@@ -302,13 +316,13 @@ class TradeEngine:
     async def open_position(self, signal):
         """Open position"""
         try:
-            # Get market data
-            balance = self.get_account_balance()
+            # Get market data - use wallet balance for position sizing
+            wallet_balance = self.get_wallet_balance_only()
             ticker = self.exchange.get_tickers(category="linear", symbol=self.linear)
             current_price = float(ticker['result']['list'][0]['lastPrice'])
             
-            # Calculate position
-            position_size = self.risk_manager.calculate_position_size(balance, current_price)
+            # Calculate position using wallet balance (cash available)
+            position_size = self.risk_manager.calculate_position_size(wallet_balance, current_price)
             info = self.get_symbol_info()
             if not info:
                 return False
