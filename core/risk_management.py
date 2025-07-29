@@ -39,12 +39,7 @@ class RiskManager:
         self.low_price_multiplier = 0.9       # 90% of normal size for low prices
         self.high_price_multiplier = 0.8      # 80% of normal size for high prices (RISK REDUCTION)
         
-        # ZORA-Optimized Ranging Market Exit Parameters
-        self.ranging_exit_cycles = 3          # Exit after 3 ranging cycles (FASTER)
-        self.ranging_profit_threshold = 0.15  # Take profit at 0.15% in ranging (SMALLER PROFITS)
-        self.ranging_loss_threshold = -0.6    # Cut loss at -0.6% in ranging (FASTER CUTS)
-        
-        # ZORA-Specific RSI/MFI Thresholds (MISSING IN YOUR FILE)
+        # ZORA-Specific RSI/MFI Thresholds
         self.rsi_oversold = 25                # More strict than 30
         self.rsi_overbought = 75              # More strict than 70  
         self.mfi_oversold = 25                # More strict
@@ -57,7 +52,7 @@ class RiskManager:
         return (unrealized_pnl / account_balance) * 100
     
     def calculate_zora_position_size(self, balance, price, volatility_factor=1.0):
-        """ZORA-specific position sizing with volatility adjustment (MISSING IN YOUR FILE)"""
+        """ZORA-specific position sizing with volatility adjustment"""
         base_value = balance * self.max_position_size
         
         # ZORA-specific price level adjustments
@@ -74,11 +69,10 @@ class RiskManager:
     
     def calculate_position_size(self, balance, price):
         """Calculate position size based on ZORA-optimized risk parameters"""
-        # Use ZORA-specific position sizing
         return self.calculate_zora_position_size(balance, price)
     
     def get_dynamic_profit_lock_threshold(self, atr_pct):
-        """Calculate dynamic profit lock threshold based on ATR (FIXED CALCULATION)"""
+        """Calculate dynamic profit lock threshold based on ATR"""
         try:
             # FIXED Formula: base + (atr_pct * multiplier)
             dynamic_threshold = self.base_profit_lock_threshold + (atr_pct * self.atr_multiplier)
@@ -96,7 +90,7 @@ class RiskManager:
             return self.profit_lock_threshold  # Fallback to static
     
     def should_activate_profit_lock(self, account_pnl_pct, atr_pct=None):
-        """Check if profit lock should be activated (UPDATED - ATR OPTIONAL)"""
+        """Check if profit lock should be activated"""
         if atr_pct is None:
             # Fallback to static threshold
             return account_pnl_pct >= self.profit_lock_threshold
@@ -116,29 +110,6 @@ class RiskManager:
     def should_reverse_on_signal(self, account_pnl_pct):
         """Check if position should reverse on opposite signal"""
         return account_pnl_pct <= self.position_reversal_threshold
-    
-    def should_exit_ranging_market(self, pnl_pct, current_trend, current_rsi, current_mfi, position_side, ranging_cycles):
-        """Check if position should exit due to ranging market conditions (ZORA-OPTIMIZED)"""
-        # Exit after too many ranging cycles (faster for ZORA)
-        if ranging_cycles >= self.ranging_exit_cycles:
-            return True, f"ZORA ranging market exit ({ranging_cycles} cycles)"
-        
-        # Take smaller profits in ranging market (optimized for crypto volatility)
-        if current_trend == "SIDEWAYS" and pnl_pct >= self.ranging_profit_threshold:
-            return True, f"ZORA ranging profit exit ({pnl_pct:.2f}%)"
-        
-        # Cut losses faster in ranging market (crypto-specific)
-        if current_trend == "SIDEWAYS" and pnl_pct <= self.ranging_loss_threshold:
-            return True, f"ZORA ranging loss exit ({pnl_pct:.2f}%)"
-        
-        # Exit on extreme RSI/MFI in ranging (ZORA-specific thresholds)
-        if current_trend == "SIDEWAYS":
-            if position_side == "Buy" and current_rsi >= self.rsi_overbought and current_mfi >= self.mfi_overbought:
-                return True, "ZORA ranging overbought exit"
-            elif position_side == "Sell" and current_rsi <= self.rsi_oversold and current_mfi <= self.mfi_oversold:
-                return True, "ZORA ranging oversold exit"
-        
-        return False, ""
     
     def is_valid_zora_signal(self, rsi, mfi, trend, volume_ratio=1.0, macd=0, macd_signal=0):
         """ZORA-specific signal validation - VOLUME CHECK REMOVED"""
@@ -179,7 +150,7 @@ class RiskManager:
         return current_price * self.trailing_stop_distance
     
     def get_price_zone(self, price):
-        """Determine ZORA price zone for risk assessment (MISSING IN YOUR FILE)"""
+        """Determine ZORA price zone for risk assessment"""
         if price > self.high_price_threshold:
             return "HIGH_RISK (Above $0.08 resistance)"
         elif price < self.low_price_threshold:
@@ -229,6 +200,5 @@ class RiskManager:
             'profit_lock_is_dynamic': profit_lock_is_dynamic,
             'rsi_thresholds': f"{self.rsi_oversold}/{self.rsi_overbought}",
             'mfi_thresholds': f"{self.mfi_oversold}/{self.mfi_overbought}",
-            'ranging_cycles_limit': self.ranging_exit_cycles,
             'price_zone': self.get_price_zone(current_price)
         }

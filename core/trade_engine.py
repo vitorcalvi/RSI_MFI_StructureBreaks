@@ -41,10 +41,6 @@ class TradeEngine:
         self.last_trailing_update = None
         self.current_atr_pct = 0
         
-        # Ranging market tracking
-        self.ranging_cycles = 0
-        self.last_trend = None
-        
     def connect(self):
         """Initialize exchange connection"""
         try:
@@ -167,26 +163,12 @@ class TradeEngine:
             # No position
             if self.position is not None:
                 print(f"\n📉 Position closed")
-                self.ranging_cycles = 0
-                self.last_trend = None
             self.position = None
             self.profit_lock_active = False
             return None
         except Exception as e:
             print(f"❌ Position check error: {e}")
             return None
-    
-    def update_ranging_tracking(self, current_trend):
-        """Update ranging market cycle tracking"""
-        if self.last_trend == current_trend:
-            if current_trend == "SIDEWAYS":
-                self.ranging_cycles += 1
-            else:
-                self.ranging_cycles = 0
-        else:
-            self.ranging_cycles = 0
-        
-        self.last_trend = current_trend
     
     def get_symbol_info(self):
         """Get symbol trading rules"""
@@ -260,26 +242,14 @@ class TradeEngine:
                     self.position['size'], pnl_pct, self.position['unrealized_pnl']
                 )
 
-    async def check_smart_exit_conditions(self, current_rsi, current_mfi, current_trend):
-        """FIXED: Check all smart exit conditions in one place"""
+    async def check_profit_protection(self):
+        """Check profit protection only"""
         if not self.position:
             return
             
         pnl_pct = self.position['unrealized_pnl_pct']
-        position_side = self.position['side']
         
-        # 1. Check ranging market exit
-        should_exit_ranging, ranging_reason = self.risk_manager.should_exit_ranging_market(
-            pnl_pct, current_trend, current_rsi, current_mfi, 
-            position_side, self.ranging_cycles
-        )
-        
-        if should_exit_ranging:
-            print(f"\n🎯 SMART EXIT: {ranging_reason}")
-            await self.close_position("Smart Exit")
-            return
-        
-        # 2. Check profit protection (high profit)
+        # Check profit protection (high profit)
         if self.risk_manager.should_take_profit_protection(pnl_pct):
             print(f"\n💰 PROFIT PROTECTION: {pnl_pct:.2f}% (threshold: {self.risk_manager.profit_protection_threshold}%)")
             await self.close_position("Profit Protection")
@@ -397,8 +367,6 @@ class TradeEngine:
                 print(f"⚠️ Stop setting error: {e} (continuing)")
             
             self.profit_lock_active = False
-            self.ranging_cycles = 0
-            self.last_trend = None
             
             await self.notifier.trade_opened(self.symbol, current_price, float(qty), side)
             return True
@@ -440,8 +408,6 @@ class TradeEngine:
             
             self.position = None
             self.profit_lock_active = False
-            self.ranging_cycles = 0
-            self.last_trend = None
             return True
             
         except Exception as e:
@@ -449,7 +415,7 @@ class TradeEngine:
             return False
 
     async def run_cycle(self):
-        """Run trading cycle with FIXED smart exit logic"""
+        """Run trading cycle - SIMPLIFIED (No ranging logic)"""
         try:
             df = self.get_market_data()
             if df is None or df.empty:
@@ -488,29 +454,22 @@ class TradeEngine:
                 except Exception as e:
                     print(f"⚠️ Indicator calculation error: {e}")
             
-            # Update ranging tracking
-            self.update_ranging_tracking(current_trend)
-            
             # Handle cooldown
             if self.reversal_cooldown_cycles > 0:
                 self.reversal_cooldown_cycles -= 1
                 if self.reversal_cooldown_cycles == 0:
                     print(f"\n🔓 Cooldown ended")
             
-            # FIXED: Check all exit conditions if we have a position
+            # SIMPLIFIED: Only check essential exit conditions if we have a position
             if self.position:
-                # 1. Check smart exit conditions FIRST
-                await self.check_smart_exit_conditions(current_rsi, current_mfi, current_trend)
-                
-                # 2. Only check other conditions if position still exists
-                if self.position:
+                await self.check_profit_protection()  # Only profit protection
+                if self.position:  # Check if still exists after profit protection
                     await self.check_profit_lock(current_price)
                     await self.check_loss_switch()
             
-            # Display status
+            # Display status (removed ranging info)
             position_info = 'None'
             cooldown_info = ''
-            ranging_info = ''
             trend_emoji = {"UP": "🟢", "DOWN": "🔴", "SIDEWAYS": "🟡", "UNKNOWN": "⚪"}.get(current_trend, "⚪")
             
             if self.reversal_cooldown_cycles > 0:
@@ -520,9 +479,6 @@ class TradeEngine:
                 pnl_pct = self.position['unrealized_pnl_pct']
                 lock_status = '🔒' if self.profit_lock_active else ''
                 position_info = f"{self.position['side']} ({pnl_pct:+.2f}%) {lock_status}"
-            
-            if self.ranging_cycles > 0:
-                ranging_info = f' [Ranging: {self.ranging_cycles}]'
             
             # ATR and Lock threshold display
             if self.current_atr_pct > 0:
@@ -536,77 +492,15 @@ class TradeEngine:
             print(f"\r[{datetime.now().strftime('%H:%M:%S')}] "
                 f"${current_price:.4f} | RSI:{current_rsi:.1f} | MFI:{current_mfi:.1f} | "
                 f"{trend_emoji}{current_trend} | {atr_display} | {lock_display} | "
-                f"{position_info}{cooldown_info}{ranging_info}", 
+                f"{position_info}{cooldown_info}", 
                 end='', flush=True)
             
-            # Handle signals - SIMPLIFIED LOGIC
+            # Handle signals
             if signal:
                  await self.handle_signal_zora_optimized(signal)
                 
         except Exception as e:
             print(f"\n❌ Cycle error: {e}")
-    
-    async def handle_signal_simple(self, signal):
-        """FIXED: Simplified signal handling - more responsive"""
-        signal_action = signal['action']
-        
-        if self.position:
-            current_side = self.position['side']
-            pnl_pct = self.position['unrealized_pnl_pct']
-            
-            # Check if signal is opposite to current position
-            should_reverse = (
-                (current_side == 'Buy' and signal_action == 'SELL') or 
-                (current_side == 'Sell' and signal_action == 'BUY')
-            )
-            
-            if should_reverse:
-                # SIMPLIFIED: More aggressive reversal logic
-                if pnl_pct >= 0.1:  # Any profit > 0.1% = take it
-                    print(f"\n💰 Taking {pnl_pct:.2f}% profit on opposite signal")
-                    await self.close_position("Profit Signal")
-                    await asyncio.sleep(2)
-                    await self.open_position(signal)
-                elif pnl_pct <= -2.0:  # Loss > 2% = reverse to limit damage
-                    print(f"\n🔄 Reversing losing position: {pnl_pct:.2f}%")
-                    await self.close_position("Loss Reversal")
-                    await asyncio.sleep(2)
-                    await self.open_position(signal)
-                else:
-                    print(f"\n⏸️ Signal ignored - P&L: {pnl_pct:.2f}% (between -2% and +0.1%)")
-        else:
-            # No position - open new one if not in cooldown
-            if self.reversal_cooldown_cycles > 0:
-                print(f"\n⏸️ Cooldown active ({self.reversal_cooldown_cycles} cycles)")
-            else:
-                atr_info = f" (ATR: {self.current_atr_pct:.1f}%)" if self.current_atr_pct > 0 else ""
-                print(f"\n🎯 Signal: {signal_action} @ ${signal['price']:.4f}{atr_info}")
-                await self.open_position(signal)
-    
-    async def run(self):
-        """Main trading loop"""
-        self.running = True
-        try:
-            while self.running:
-                await self.run_cycle()
-                await asyncio.sleep(10)
-        except Exception as e:
-            print(f"\n❌ Runtime error: {e}")
-            await self.notifier.error_notification(str(e))
-    
-    async def stop(self):
-        """Stop trading engine"""
-        print("\n⚠️ Stopping...")
-        self.running = False
-        
-        if self.position:
-            await self.close_position("Bot Stop")
-        
-        await self.notifier.bot_stopped()
-        print("✅ Stopped")
-        
-
-# Add this method to your TradeEngine class:
 
     async def handle_signal_zora_optimized(self, signal):
         """ZORA-optimized signal handling with volume and MACD confirmation"""
@@ -688,6 +582,25 @@ class TradeEngine:
                 vol_info = f" (Vol: {volume_ratio:.1f}x)" if volume_ratio > 1.0 else ""
                 print(f"\n🎯 ZORA Signal: {signal_action} @ ${signal['price']:.4f}{atr_info}{vol_info}")
                 await self.open_position(signal)
-
-    # Replace your current handle_signal_simple method call with:
-    # await self.handle_signal_zora_optimized(signal)
+    
+    async def run(self):
+        """Main trading loop"""
+        self.running = True
+        try:
+            while self.running:
+                await self.run_cycle()
+                await asyncio.sleep(10)
+        except Exception as e:
+            print(f"\n❌ Runtime error: {e}")
+            await self.notifier.error_notification(str(e))
+    
+    async def stop(self):
+        """Stop trading engine"""
+        print("\n⚠️ Stopping...")
+        self.running = False
+        
+        if self.position:
+            await self.close_position("Bot Stop")
+        
+        await self.notifier.bot_stopped()
+        print("✅ Stopped")
