@@ -33,6 +33,10 @@ class RiskManager:
         self.min_profit_lock_threshold = 0.08    # 0.08% minimum (DOWN from 0.15%)
         self.max_profit_lock_threshold = 0.25    # 0.25% maximum (DOWN from 0.6%)
         
+        # MISSING PROPERTIES - ADDED
+        self.profit_reversal_threshold = 0.5  # 0.5% profit to reverse on opposite signal
+        self.loss_reversal_threshold = -1.5   # -1.5% loss to reverse on opposite signal
+        
         # HFT-OPTIMIZED Cooldown (FASTER REVERSALS) - From JSON
         self.reversal_cooldown_cycles = self.config['signal_cooldown']
         
@@ -141,6 +145,15 @@ class RiskManager:
     def should_reverse_on_signal(self, account_pnl_pct):
         """Check if position should reverse on opposite signal"""
         return account_pnl_pct <= self.position_reversal_threshold
+    
+    # MISSING METHODS - ADDED
+    def should_reverse_for_profit(self, account_pnl_pct):
+        """Check if should reverse position for profit"""
+        return account_pnl_pct >= self.profit_reversal_threshold
+    
+    def should_reverse_for_loss(self, account_pnl_pct):
+        """Check if should reverse position for loss"""
+        return account_pnl_pct <= self.loss_reversal_threshold
     
     def is_valid_zora_signal(self, rsi, mfi, trend, volume_ratio=1.0, macd=0, macd_signal=0):
         """ZORA-specific signal validation - LESS STRICT"""

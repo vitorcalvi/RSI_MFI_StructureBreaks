@@ -172,7 +172,8 @@ class RSIMFICloudStrategy:
         df['rsi'] = self.calculate_rsi(df['close'])
         df['mfi'] = self.calculate_mfi(df['high'], df['low'], df['close'])
         df['trend'] = self.calculate_trend(df['close'])
-        df['price_change'] = df['close'].pct_change(fill_method=None)
+        # FIXED: Remove deprecated fill_method parameter
+        df['price_change'] = df['close'].pct_change()
         df['atr'] = self.calculate_atr(df)
         
         return df
