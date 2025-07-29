@@ -5,15 +5,16 @@ class RiskManager:
     def __init__(self):
         self._load_config()
         
-        self.leverage = 25                      # 25x leverage
-        self.max_position_size = 0.002          # 0.2% for 5% total risk with 25x leverage
+        self.leverage = 10                      # 25x leverage
+        self.max_position_size = 0.002          # 0.2% of wallet balance
         self.stop_loss_pct = 0.015              # 1.5% stop loss distance
         self.trailing_stop_distance = 0.01      # 1% trailing distance
         
-        # FIXED: Risk thresholds based on ROE (leveraged P&L percentage)
-        self.profit_lock_threshold = 0.5        # 0.5% ROE to activate trailing
-        self.profit_protection_threshold = 2.0  # 2.0% ROE to close
-        self.loss_reversal_threshold = -1.0     # -1.0% ROE to reverse
+        # FIXED: Risk thresholds based on POSITION P&L (not wallet P&L)
+        # With 25x leverage, these translate to wallet impact
+        self.profit_lock_threshold = 0.5 * self.leverage        # 12.5% position P&L = 0.5% wallet impact
+        self.profit_protection_threshold = 2.0 * self.leverage  # 50% position P&L = 2.0% wallet impact  
+        self.loss_reversal_threshold = -1.0 * self.leverage     # -25% position P&L = -1.0% wallet impact
         
         # Cooldown cycles
         self.reversal_cooldown_cycles = self.config.get('signal_cooldown', 2)
@@ -35,23 +36,34 @@ class RiskManager:
     
     def get_actual_risk_per_trade(self, balance):
         """Calculate actual risk percentage per trade"""
+        # FIXED: With leverage, actual risk = position_size * stop_loss_pct * leverage impact
         position_value = balance * self.max_position_size
-        max_loss = position_value * self.stop_loss_pct
-        risk_pct = (max_loss / balance) * 100
-        print(f"🔍 Risk Debug: Position: ${position_value:.2f}, Max Loss: ${max_loss:.2f}, Risk: {risk_pct:.4f}%")
-        return risk_pct
+        # Stop loss creates this much absolute loss
+        stop_loss_absolute = position_value * self.stop_loss_pct
+        # Return as percentage of wallet
+        return (stop_loss_absolute / balance) * 100
     
-    def should_activate_profit_lock(self, roe_pct):
-        """Activate profit lock at 0.5% ROE"""
-        return roe_pct >= self.profit_lock_threshold
+    def calculate_wallet_pnl_from_position_pnl(self, position_pnl_pct, wallet_balance, entry_price):
+        """FIXED: Convert position P&L% to wallet P&L%"""
+        # Position size in USDT
+        position_value = wallet_balance * self.max_position_size
+        # Absolute P&L in USDT
+        absolute_pnl = position_value * (position_pnl_pct / 100)
+        # Wallet P&L percentage  
+        wallet_pnl_pct = (absolute_pnl / wallet_balance) * 100
+        return wallet_pnl_pct
     
-    def should_take_profit_protection(self, roe_pct):
-        """HIGHEST PRIORITY - Close at 2.0% ROE"""
-        return roe_pct >= self.profit_protection_threshold
+    def should_activate_profit_lock(self, position_pnl_pct):
+        """FIXED: Activate profit lock at 12.5% position P&L (0.5% wallet impact)"""
+        return position_pnl_pct >= self.profit_lock_threshold
     
-    def should_reverse_for_loss(self, roe_pct):
-        """Only reverse on loss - NOT profit"""
-        return roe_pct <= self.loss_reversal_threshold
+    def should_take_profit_protection(self, position_pnl_pct):
+        """FIXED: Close at 50% position P&L (2.0% wallet impact)"""
+        return position_pnl_pct >= self.profit_protection_threshold
+    
+    def should_reverse_for_loss(self, position_pnl_pct):
+        """FIXED: Reverse at -25% position P&L (-1.0% wallet impact)"""
+        return position_pnl_pct <= self.loss_reversal_threshold
     
     def get_stop_loss(self, entry_price, side='long'):
         """Calculate stop loss price"""
@@ -64,19 +76,19 @@ class RiskManager:
         """Calculate absolute trailing stop distance"""
         return current_price * self.trailing_stop_distance
     
-    def get_risk_zone(self, roe_pct):
+    def get_risk_zone(self, position_pnl_pct):
         """Return current risk zone for display"""
-        if roe_pct >= self.profit_protection_threshold:
+        if position_pnl_pct >= self.profit_protection_threshold:
             return "PROFIT_PROTECTION"
-        elif roe_pct >= self.profit_lock_threshold:
-            return "PROFIT_LOCK"
-        elif roe_pct <= self.loss_reversal_threshold:
+        elif position_pnl_pct >= self.profit_lock_threshold:
+            return "PROFIT_LOCK"  
+        elif position_pnl_pct <= self.loss_reversal_threshold:
             return "LOSS_REVERSAL"
         else:
             return "NORMAL"
     
     def get_risk_summary(self, balance):
-        """Get risk summary for display"""
+        """Get risk summary for display - FIXED"""
         position_value = balance * self.max_position_size
         max_loss = position_value * self.stop_loss_pct
         risk_pct = self.get_actual_risk_per_trade(balance)
@@ -87,7 +99,10 @@ class RiskManager:
             'position_value': position_value,
             'max_loss_usd': max_loss,
             'risk_per_trade_pct': risk_pct,
-            'profit_lock_threshold': self.profit_lock_threshold,
-            'profit_protection_threshold': self.profit_protection_threshold,
-            'loss_reversal_threshold': self.loss_reversal_threshold
+            'profit_lock_threshold': self.profit_lock_threshold,  # Position P&L%
+            'profit_protection_threshold': self.profit_protection_threshold,  # Position P&L%
+            'loss_reversal_threshold': self.loss_reversal_threshold,  # Position P&L%
+            'wallet_profit_lock': self.profit_lock_threshold / self.leverage,  # Wallet impact
+            'wallet_profit_protection': self.profit_protection_threshold / self.leverage,  # Wallet impact
+            'wallet_loss_reversal': self.loss_reversal_threshold / self.leverage  # Wallet impact
         }
