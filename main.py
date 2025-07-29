@@ -33,8 +33,8 @@ def display_info(engine, total_equity, current_price):
     print(f"💰 Profit Protection: {engine.risk_manager.profit_protection_threshold:.1f}% → Close position")
     
     print(f"\n🔄 REVERSAL THRESHOLDS:")
-    print(f"📈 Profit: +{engine.risk_manager.profit_reversal_threshold:.1f}%")
-    print(f"📉 Loss: {engine.risk_manager.loss_reversal_threshold:.1f}%")
+    print(f"📉 Loss Reversal: {engine.risk_manager.loss_reversal_threshold:.1f}%")
+    print(f"🚫 Profit Reversal: REMOVED (fixes conflicts)")
     
     print(f"\n🎮 STRATEGY:")
     print(f"📈 RSI: {engine.strategy.params['oversold_level']}/{engine.strategy.params['overbought_level']} (Length: {engine.strategy.params['rsi_length']})")

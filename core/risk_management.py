@@ -11,11 +11,13 @@ class RiskManager:
         self.stop_loss_pct = 0.015     # 1.5%
         self.trailing_stop_distance = 0.008  # 0.8%
         
-        # PROFIT THRESHOLDS (% of account)
+        # CLEAR PRIORITY ORDER - NO CONFLICTS
         self.profit_lock_threshold = 0.8      # 0.8% to activate trailing
-        self.profit_protection_threshold = 2.0 # 2.0% to close
-        self.profit_reversal_threshold = 1.0   # 1.0% profit to reverse
+        self.profit_protection_threshold = 2.0 # 2.0% to close (FINAL)
         self.loss_reversal_threshold = -1.0    # -1.0% loss to reverse
+        
+        # REMOVED CONFLICTING ATTRIBUTES
+        # self.profit_reversal_threshold - REMOVED to fix conflicts
         
         # COOLDOWN
         self.reversal_cooldown_cycles = self.config.get('signal_cooldown', 2)
@@ -37,9 +39,6 @@ class RiskManager:
     def symbol(self):
         return self.config.get('symbol', 'ZORA/USDT')
     
-    def calculate_account_pnl_pct(self, unrealized_pnl, account_balance):
-        return (unrealized_pnl / account_balance) * 100 if account_balance > 0 else 0
-    
     def calculate_position_size(self, balance, price):
         base_value = balance * self.max_position_size
         return base_value / price
@@ -48,12 +47,11 @@ class RiskManager:
         return account_pnl_pct >= self.profit_lock_threshold
     
     def should_take_profit_protection(self, account_pnl_pct):
+        """HIGHEST PRIORITY - Always close at 2%"""
         return account_pnl_pct >= self.profit_protection_threshold
     
-    def should_reverse_for_profit(self, account_pnl_pct):
-        return account_pnl_pct >= self.profit_reversal_threshold
-    
     def should_reverse_for_loss(self, account_pnl_pct):
+        """Only reverse on loss - NOT profit"""
         return account_pnl_pct <= self.loss_reversal_threshold
     
     def get_stop_loss(self, entry_price, side='long'):
@@ -64,3 +62,14 @@ class RiskManager:
     
     def get_trailing_stop_distance_absolute(self, current_price):
         return current_price * self.trailing_stop_distance
+    
+    def get_risk_zone(self, account_pnl_pct):
+        """Return current risk zone for display"""
+        if account_pnl_pct >= self.profit_protection_threshold:
+            return "PROFIT_PROTECTION"
+        elif account_pnl_pct >= self.profit_lock_threshold:
+            return "PROFIT_LOCK"
+        elif account_pnl_pct <= self.loss_reversal_threshold:
+            return "LOSS_REVERSAL"
+        else:
+            return "NORMAL"
