@@ -7,24 +7,12 @@ class RSIMFICloudStrategy:
     def __init__(self):
         self._load_config()
         self.last_signal = None
-        self.signal_cooldown = 0
     
     def _load_config(self):
-        try:
             current_dir = os.path.dirname(os.path.abspath(__file__))
             params_file = os.path.join(current_dir, 'params_RSI_MFI_Cloud.json')
             with open(params_file, 'r') as f:
                 self.params = json.load(f)
-        except:
-            self.params = {
-                'symbol': 'ZORA/USDT',
-                'rsi_length': 5,
-                'mfi_length': 5,
-                'oversold_level': 40,
-                'overbought_level': 50,
-                'signal_cooldown': 1,
-                'require_trend': False
-            }
     
     @property
     def symbol(self):
@@ -73,6 +61,22 @@ class RSIMFICloudStrategy:
         
         return mfi.fillna(50).clip(0, 100)
     
+    def calculate_mfi_trend(self, mfi):
+        # MFI trend using fast vs slow EMA
+        mfi_fast = mfi.ewm(span=3).mean()
+        mfi_slow = mfi.ewm(span=8).mean()
+        
+        trend = pd.Series(['NEUTRAL'] * len(mfi), index=mfi.index)
+        trend[mfi_fast > mfi_slow] = 'BULLISH'
+        trend[mfi_fast < mfi_slow] = 'BEARISH'
+        
+        return trend
+    
+    def calculate_mfi_momentum(self, mfi):
+        # MFI momentum (rate of change)
+        momentum = mfi.diff(3)  # 3-period rate of change
+        return momentum.fillna(0)
+    
     def calculate_trend(self, close):
         ema_fast = close.ewm(span=12).mean()
         ema_slow = close.ewm(span=26).mean()
@@ -91,6 +95,8 @@ class RSIMFICloudStrategy:
         df['rsi'] = self.calculate_rsi(df['close'])
         df['mfi'] = self.calculate_mfi(df['high'], df['low'], df['close'])
         df['trend'] = self.calculate_trend(df['close'])
+        df['mfi_trend'] = self.calculate_mfi_trend(df['mfi'])
+        df['mfi_momentum'] = self.calculate_mfi_momentum(df['mfi'])
         
         return df
     
@@ -107,14 +113,11 @@ class RSIMFICloudStrategy:
         current_mfi = df['mfi'].iloc[-1]
         current_price = df['close'].iloc[-1]
         current_trend = df['trend'].iloc[-1]
+        current_mfi_trend = df['mfi_trend'].iloc[-1]
+        current_mfi_momentum = df['mfi_momentum'].iloc[-1]
         
         # Check for invalid values
         if pd.isna(current_rsi) or pd.isna(current_mfi):
-            return None
-        
-        # Check cooldown
-        if self.signal_cooldown > 0:
-            self.signal_cooldown -= 1
             return None
         
         # Signal conditions
@@ -122,13 +125,15 @@ class RSIMFICloudStrategy:
         overbought = self.params['overbought_level']
         require_trend = self.params.get('require_trend', False)
         
-        # BUY signal
-        if (current_rsi < oversold and current_mfi < oversold and 
+        # BUY signal - All conditions must align
+        if (current_rsi < oversold and 
+            current_mfi < oversold and 
+            current_mfi_trend == 'BULLISH' and
+            current_mfi_momentum > 0 and
             (not require_trend or current_trend == "UP") and 
             self.last_signal != 'BUY'):
             
             self.last_signal = 'BUY'
-            self.signal_cooldown = self.params['signal_cooldown']
             
             return {
                 'action': 'BUY',
@@ -136,16 +141,20 @@ class RSIMFICloudStrategy:
                 'rsi': round(current_rsi, 2),
                 'mfi': round(current_mfi, 2),
                 'trend': current_trend,
+                'mfi_trend': current_mfi_trend,
+                'mfi_momentum': round(current_mfi_momentum, 2),
                 'timestamp': df.index[-1]
             }
         
-        # SELL signal
-        elif (current_rsi > overbought and current_mfi > overbought and 
+        # SELL signal - All conditions must align
+        elif (current_rsi > overbought and 
+              current_mfi > overbought and 
+              current_mfi_trend == 'BEARISH' and
+              current_mfi_momentum < 0 and
               (not require_trend or current_trend == "DOWN") and 
               self.last_signal != 'SELL'):
             
             self.last_signal = 'SELL'
-            self.signal_cooldown = self.params['signal_cooldown']
             
             return {
                 'action': 'SELL',
@@ -153,6 +162,8 @@ class RSIMFICloudStrategy:
                 'rsi': round(current_rsi, 2),
                 'mfi': round(current_mfi, 2),
                 'trend': current_trend,
+                'mfi_trend': current_mfi_trend,
+                'mfi_momentum': round(current_mfi_momentum, 2),
                 'timestamp': df.index[-1]
             }
         

@@ -57,14 +57,23 @@ class TradeEngine:
 
     def _set_leverage(self):
         try:
-            self.exchange.set_leverage(
+            result = self.exchange.set_leverage(
                 category="linear",
                 symbol=self.linear,
                 buyLeverage=str(self.risk_manager.leverage),
                 sellLeverage=str(self.risk_manager.leverage)
             )
-        except:
-            pass
+            if result.get('retCode') != 0:
+                print(f"⚠️ Failed to set leverage: {result.get('retMsg')}")
+                # Try to get current leverage
+                positions = self.exchange.get_positions(category="linear", symbol=self.linear)
+                if positions.get('retCode') == 0 and positions['result']['list']:
+                    current_leverage = positions['result']['list'][0].get('leverage', 'Unknown')
+                    print(f"⚠️ Current leverage: {current_leverage}x (wanted: {self.risk_manager.leverage}x)")
+            else:
+                print(f"✅ Leverage set to {self.risk_manager.leverage}x")
+        except Exception as e:
+            print(f"❌ Leverage setting error: {e}")
     
     def get_market_data(self):
         try:
@@ -91,6 +100,14 @@ class TradeEngine:
         except Exception as e:
             print(f"❌ Market data error: {e}")
             return None
+    
+    def calculate_atr(self, df, period=14):
+        """Calculate ATR for the dataframe"""
+        high_low = df['high'] - df['low']
+        high_close = abs(df['high'] - df['close'].shift(1))
+        low_close = abs(df['low'] - df['close'].shift(1))
+        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        return true_range.rolling(window=period).mean().iloc[-1]
     
     def get_account_balance(self):
         try:
@@ -123,6 +140,7 @@ class TradeEngine:
                     unrealized_pnl = float(position['unrealisedPnl'])
                     avg_price = float(position['avgPrice'])
                     leverage = float(position['leverage'])
+                    liq_price = float(position.get('liqPrice', 0))
                     
                     # Calculate position metrics
                     position_value = position_size * avg_price
@@ -148,7 +166,8 @@ class TradeEngine:
                         'wallet_pnl_pct': wallet_pnl_pct,     # FIXED: Direct wallet impact
                         'margin_used': margin_used,
                         'position_value': position_value,
-                        'leverage': leverage
+                        'leverage': leverage,
+                        'liq_price': liq_price
                     }
                     
                     return self.position
@@ -187,6 +206,8 @@ class TradeEngine:
     
     def format_price(self, info, price):
         tick = info['tick_size']
+        if tick == 0:  # Add this check
+            return str(price)
         price = round(price / tick) * tick
         
         tick_str = f"{tick:.20f}".rstrip('0').rstrip('.')
@@ -236,12 +257,52 @@ class TradeEngine:
                 print(f"✅ Trailing stop set: {formatted_trailing_distance}")
 
     async def open_position(self, signal):
+        # Check if position already exists
+        if self.position:
+            print(f"⚠️ Position already exists, skipping new position")
+            return False
+        
         try:
             wallet_balance = self.get_wallet_balance_only()
             ticker = self.exchange.get_tickers(category="linear", symbol=self.linear)
             current_price = float(ticker['result']['list'][0]['lastPrice'])
             
+            # Calculate position details
             position_size = self.risk_manager.calculate_position_size(wallet_balance, current_price)
+            position_value = position_size * current_price
+            required_margin = position_value / self.risk_manager.leverage
+            
+            # Safety check - don't use more than 50% of wallet for margin
+            if required_margin > wallet_balance * 0.5:
+                print(f"❌ Position too large! Required margin: ${required_margin:.2f}, Wallet: ${wallet_balance:.2f}")
+                print(f"   Position value: ${position_value:.2f}, Leverage: {self.risk_manager.leverage}x")
+                return False
+            
+            # Calculate approximate liquidation price
+            # Liquidation = Entry × (1 - 1/Leverage + Maintenance Margin Rate)
+            # Bybit maintenance margin is typically 0.5%
+            maintenance_rate = 0.005
+            if signal['action'] == 'BUY':
+                approx_liq_price = current_price * (1 - 1/self.risk_manager.leverage + maintenance_rate)
+            else:
+                approx_liq_price = current_price * (1 + 1/self.risk_manager.leverage - maintenance_rate)
+            
+            liq_distance = abs(approx_liq_price - current_price) / current_price * 100
+            
+            print(f"\n📊 Position Analysis:")
+            print(f"   Entry Price: ${current_price:.6f}")
+            print(f"   Position Size: {position_size:.0f} tokens")
+            print(f"   Position Value: ${position_value:.2f}")
+            print(f"   Required Margin: ${required_margin:.2f} ({required_margin/wallet_balance*100:.1f}% of wallet)")
+            print(f"   Approx Liquidation: ${approx_liq_price:.6f} ({liq_distance:.2f}% away)")
+            
+            # Warning if liquidation is too close
+            if liq_distance < 5:
+                print(f"⚠️ WARNING: Liquidation price is only {liq_distance:.2f}% away!")
+                if liq_distance < 2:
+                    print(f"❌ Position too risky, liquidation too close!")
+                    return False
+            
             info = self.get_symbol_info()
             if not info:
                 return False
@@ -416,6 +477,7 @@ class TradeEngine:
         if self.position:
             pos_pnl = self.position['position_pnl_pct']
             wallet_pnl = self.position['wallet_pnl_pct']
+            liq_price = self.position.get('liq_price', 0)
             risk_zone = self.risk_manager.get_risk_zone(pos_pnl)
             zone_emoji = {
                 'PROFIT_PROTECTION': '💰',
@@ -424,7 +486,14 @@ class TradeEngine:
                 'NORMAL': ''
             }.get(risk_zone, '')
             
-            position_info = f"{self.position['side']} ({pos_pnl:+.1f}%pos/{wallet_pnl:+.2f}%w) {zone_emoji}"
+            # Calculate liquidation distance
+            if liq_price > 0:
+                liq_distance = abs(liq_price - current_price) / current_price * 100
+                liq_info = f" Liq:{liq_distance:.1f}%"
+            else:
+                liq_info = ""
+            
+            position_info = f"{self.position['side']} ({pos_pnl:+.1f}%pos/{wallet_pnl:+.2f}%w{liq_info}) {zone_emoji}"
         
         # Trend display
         trend_emoji = {"UP": "🟢", "DOWN": "🔴", "SIDEWAYS": "🟡"}.get(current_trend, "⚪")
@@ -455,5 +524,4 @@ class TradeEngine:
         if self.position:
             await self.close_position("Bot Stop")
         
-        await self.notifier.bot_stopped()
         print("✅ Stopped")

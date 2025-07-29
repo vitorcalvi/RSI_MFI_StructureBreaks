@@ -36,12 +36,9 @@ class RiskManager:
     
     def get_actual_risk_per_trade(self, balance):
         """Calculate actual risk percentage per trade"""
-        # FIXED: With leverage, actual risk = position_size * stop_loss_pct * leverage impact
         position_value = balance * self.max_position_size
-        # Stop loss creates this much absolute loss
-        stop_loss_absolute = position_value * self.stop_loss_pct
-        # Return as percentage of wallet
-        return (stop_loss_absolute / balance) * 100
+        max_loss_with_leverage = position_value * self.stop_loss_pct * self.leverage
+        return (max_loss_with_leverage / balance) * 100
     
     def calculate_wallet_pnl_from_position_pnl(self, position_pnl_pct, wallet_balance, entry_price):
         """FIXED: Convert position P&L% to wallet P&L%"""
