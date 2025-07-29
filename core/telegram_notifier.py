@@ -41,14 +41,13 @@ class TelegramNotifier:
         self.position_start_time = datetime.now()
         
         direction_emoji = "📈" if side == "Buy" else "📉"
-        position_value = size * price
+        position_type = "LONG" if side == "Buy" else "SHORT"
+        position_value = size * price 
+
         msg = (
-            f"🔔 {direction_emoji} OPENED {symbol}\n"
-            f"📍 {side.upper()}\n"
-            f"⏰ {self.position_start_time:%H:%M:%S}\n"
-            f"💰 ${price:.4f}\n"
-            f"📊 {size}\n"
-            f"💵 ${position_value:.2f} USDT"
+            f"🔔 {direction_emoji} {position_type} {symbol} "
+            f"@ ⏰ {self.position_start_time:%H:%M:%S}\n"
+            f"💵 ${position_value:.2f} USDT" # Displaying the total value directly
         )
         await self.send_message(msg)
 
@@ -126,9 +125,6 @@ class TelegramNotifier:
         await self.send_message(msg)
 
     async def bot_started(self, symbol, balance):
-        """Notify when bot starts"""
-       
-        
         msg = (
             f"🤖 BOT STARTED\n"
             f"📊 {symbol}\n"

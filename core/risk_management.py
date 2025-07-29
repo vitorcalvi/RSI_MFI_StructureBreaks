@@ -12,26 +12,20 @@ class RiskManager:
         # SAFE TRADING PARAMETERS - FIXED
         # =============================================
         
-        # SAFE Leverage & Position Sizing
-        self.leverage = 5                    # REDUCED from 10x to 5x
+        self.leverage = 25                    
         self.max_position_size = 0.04        # REDUCED from 10% to 4%
         self.risk_per_trade = 0.02           # REDUCED from 5% to 2%
         
-        # SAFE Price Movement Thresholds
         self.stop_loss_pct = 0.015           # 1.5% price SL (tighter)
-        # REMOVED: take_profit_pct - Project holds until signal/protection (no TP)
         self.trailing_stop_distance = 0.008  # 0.8% trailing
         
-        # SAFE Account P&L Thresholds - FIXED CONFLICTS
-        self.profit_lock_threshold = 0.8     # 0.8% account (realistic with 5x leverage)
+        self.profit_lock_threshold = 0.2     # 0.8% account (realistic with 5x leverage)
         self.profit_protection_threshold = 2.0 # 2.0% account
         
-        # UNIFIED REVERSAL THRESHOLDS - FIXED CONFLICTS
         self.profit_reversal_threshold = 1.0   # 1.0% profit to reverse
         self.loss_reversal_threshold = -1.0    # -1.0% loss to reverse
         self.position_reversal_threshold = -1.5 # -1.5% for other reversals
         
-        # SAFE ATR DYNAMIC PROFIT LOCK - UNIFIED
         self.base_profit_lock_threshold = self.profit_lock_threshold  # UNIFIED - no conflicts
         self.atr_multiplier = self.config['atr_multiplier']
         self.min_profit_lock_threshold = 0.5    # 0.5% minimum

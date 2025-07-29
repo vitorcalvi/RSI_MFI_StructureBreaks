@@ -647,7 +647,7 @@ class TradeEngine:
         try:
             while self.running:
                 await self.run_cycle()
-                await asyncio.sleep(10)
+                await asyncio.sleep(5)
         except Exception as e:
             print(f"\n❌ Runtime error: {e}")
             await self.notifier.error_notification(str(e))
