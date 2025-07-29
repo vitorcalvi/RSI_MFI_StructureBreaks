@@ -5,11 +5,11 @@ from datetime import datetime
 from pybit.unified_trading import HTTP
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
-
 from strategies.RSI_MFI_Cloud import RSIMFICloudStrategy
 from core.risk_management import RiskManager
 from core.telegram_notifier import TelegramNotifier
+
+load_dotenv(override=True)
 
 class TradeEngine:
     def __init__(self):
@@ -64,7 +64,7 @@ class TradeEngine:
                 sellLeverage=str(self.risk_manager.leverage)
             )
         except:
-            pass  # Leverage might already be set
+            pass
     
     def get_market_data(self):
         try:
@@ -123,19 +123,20 @@ class TradeEngine:
                     unrealized_pnl = float(position['unrealisedPnl'])
                     avg_price = float(position['avgPrice'])
                     
-                    # Calculate margin used (position value / leverage)
+                    # FIXED: Calculate P&L percentage based on WALLET BALANCE (not margin)
+                    wallet_balance = self.get_wallet_balance_only()
+                    pnl_pct = (unrealized_pnl / wallet_balance) * 100 if wallet_balance > 0 else 0
+                    
+                    # Calculate position metrics
                     position_value = position_size * avg_price
                     margin_used = position_value / self.risk_manager.leverage
-                    
-                    # Calculate P&L percentage based on MARGIN USED (not total wallet)
-                    pnl_pct = (unrealized_pnl / margin_used) * 100 if margin_used > 0 else 0
                     
                     self.position = {
                         'side': position['side'],
                         'size': position_size,
                         'avg_price': avg_price,
                         'unrealized_pnl': unrealized_pnl,
-                        'unrealized_pnl_pct': pnl_pct,
+                        'unrealized_pnl_pct': pnl_pct,  # NOW CORRECT
                         'margin_used': margin_used,
                         'position_value': position_value
                     }
@@ -183,7 +184,7 @@ class TradeEngine:
         return f"{price:.{decimals}f}"
 
     async def handle_risk_management(self, current_price):
-        """FIXED: Clear priority order - no conflicts"""
+        """Risk management with correct P&L calculation"""
         if not self.position:
             return
             
@@ -251,9 +252,7 @@ class TradeEngine:
                 print(f"❌ Order failed: {order.get('retMsg')}")
                 return False
             
-            await asyncio.sleep(2)
-            
-            # Set stop loss only (no take profit)
+            # FIXED: Set stop loss immediately (no delay)
             await self._set_stop_loss(signal, current_price, info)
             
             self.profit_lock_active = False
@@ -333,7 +332,7 @@ class TradeEngine:
             await self._handle_signal_no_position(signal)
     
     async def _handle_signal_with_position(self, signal):
-        """FIXED: Only reverse on loss, no profit reversals"""
+        """Only reverse on loss, no profit reversals"""
         current_side = self.position['side']
         pnl_pct = self.position['unrealized_pnl_pct']
         signal_action = signal['action']
@@ -349,7 +348,7 @@ class TradeEngine:
             if self.risk_manager.should_reverse_for_loss(pnl_pct):
                 print(f"\n🔄 Reversing losing position: {pnl_pct:.2f}%")
                 await self.close_position("Loss Reversal")
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)  # Reduced delay
                 await self.open_position(signal)
     
     async def _handle_signal_no_position(self, signal):
@@ -366,8 +365,8 @@ class TradeEngine:
             if df is None or df.empty:
                 return
             
-            # Update position
-            self.check_position()
+            # Update position (get fresh data)
+            position = self.check_position()
             
             # Get signal and current price
             signal = self.strategy.generate_signal(df)
@@ -377,15 +376,16 @@ class TradeEngine:
             if self.reversal_cooldown_cycles > 0:
                 self.reversal_cooldown_cycles -= 1
             
-            # Risk management checks (FIXED ORDER)
-            if self.position:
+            # Risk management checks (using fresh position data)
+            if position:
                 await self.handle_risk_management(current_price)
             
             # Display status
             self._display_status(df, current_price)
             
-            # Handle signals
-            await self.handle_signal(signal)
+            # Handle signals (only if position still exists after risk management)
+            if self.position or not position:  # If no position or position still exists
+                await self.handle_signal(signal)
                 
         except Exception as e:
             print(f"\n❌ Cycle error: {e}")

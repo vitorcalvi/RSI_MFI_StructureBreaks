@@ -3,7 +3,7 @@ import sys
 import asyncio
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Add project root to path
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -13,28 +13,25 @@ if project_root not in sys.path:
 from core.trade_engine import TradeEngine
 
 def display_info(engine, total_equity, current_price):
-    """Display trading info"""
+    """Display trading info with correct risk calculations"""
     wallet_balance = engine.get_wallet_balance_only()
+    risk_summary = engine.risk_manager.get_risk_summary(wallet_balance)
     
     print(f"💰 Total Equity: ${total_equity:,.2f} | Wallet: ${wallet_balance:,.2f} | Symbol: {engine.symbol}")
-    print(f"⚙️ Leverage: {engine.risk_manager.leverage}x | Position: {engine.risk_manager.max_position_size*100:.1f}% of wallet")
+    print(f"⚙️ Leverage: {risk_summary['leverage']}x | Position: {risk_summary['position_size_pct']:.3f}% of wallet")
     
-    # Risk per trade
-    position_value = wallet_balance * engine.risk_manager.max_position_size
-    max_loss = position_value * engine.risk_manager.stop_loss_pct
-    risk_pct = (max_loss / wallet_balance) * 100
-    
-    print(f"\n🚨 RISK PER TRADE:")
-    print(f"💸 Max Loss: ${max_loss:.2f} ({risk_pct:.1f}% of wallet)")
-    print(f"📊 Position Value: ${position_value:.2f}")
+    # FIXED: Show actual risk per trade
+    print(f"\n🚨 RISK PER TRADE (CORRECTED):")
+    print(f"💸 Max Loss: ${risk_summary['max_loss_usd']:.2f} ({risk_summary['risk_per_trade_pct']:.2f}% of wallet)")
+    print(f"📊 Position Value: ${risk_summary['position_value']:.2f}")
+    print(f"⚠️  With 25x leverage: 0.2% position = 5% risk (SAFE)")
     
     print(f"\n🔒 PROFIT MANAGEMENT:")
-    print(f"🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.1f}% → Trailing stop")
-    print(f"💰 Profit Protection: {engine.risk_manager.profit_protection_threshold:.1f}% → Close position")
+    print(f"🔓 Profit Lock: {risk_summary['profit_lock_threshold']:.1f}% wallet P&L → Trailing stop")
+    print(f"💰 Profit Protection: {risk_summary['profit_protection_threshold']:.1f}% wallet P&L → Close position")
     
     print(f"\n🔄 REVERSAL THRESHOLDS:")
-    print(f"📉 Loss Reversal: {engine.risk_manager.loss_reversal_threshold:.1f}%")
-    print(f"🚫 Profit Reversal: REMOVED (fixes conflicts)")
+    print(f"📉 Loss Reversal: {risk_summary['loss_reversal_threshold']:.1f}% wallet P&L")
     
     print(f"\n🎮 STRATEGY:")
     print(f"📈 RSI: {engine.strategy.params['oversold_level']}/{engine.strategy.params['overbought_level']} (Length: {engine.strategy.params['rsi_length']})")
@@ -42,7 +39,7 @@ def display_info(engine, total_equity, current_price):
     print(f"⏱️ Cooldown: {engine.strategy.params['signal_cooldown']} periods")
 
 async def main():
-    print("🤖 ZORA Trading Bot - Streamlined")
+    print("🤖 ZORA Trading Bot - FIXED VERSION")
     print("=" * 50)
     
     engine = None
@@ -65,10 +62,6 @@ async def main():
         print("=" * 50)
         print(f"🚀 {mode} TRADING")
         print("=" * 50)
-        
-        if not engine.demo_mode:
-            print("🚨 LIVE TRADING - REAL MONEY AT RISK")
-            print("=" * 50)
         
         await engine.notifier.bot_started(engine.symbol, total_equity)
         await engine.run()

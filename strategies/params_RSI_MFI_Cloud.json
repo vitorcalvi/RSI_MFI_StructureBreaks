@@ -7,5 +7,5 @@
   "overbought_level": 50,
   "atr_multiplier": 1.0,
   "signal_cooldown": 1,
-  "require_trend": true
+  "require_trend": false
 }
