@@ -1,4 +1,4 @@
-# core/risk_management.py - HFT OPTIMIZED for ZORA
+# core/risk_management.py - SAFE TRADING PARAMETERS
 
 import json
 import os
@@ -9,38 +9,38 @@ class RiskManager:
         self._load_config()
         
         # =============================================
-        # HFT-OPTIMIZED RISK MANAGEMENT FOR ZORA
+        # SAFE TRADING PARAMETERS - FIXED
         # =============================================
         
-        # HFT-Optimized Leverage & Position Sizing
-        self.leverage = 10
-        self.max_position_size = 0.1         # 10% per trade (good for HFT)
-        self.risk_per_trade = 0.05            # 5% account risk per trade
+        # SAFE Leverage & Position Sizing
+        self.leverage = 5                    # REDUCED from 10x to 5x
+        self.max_position_size = 0.04        # REDUCED from 10% to 4%
+        self.risk_per_trade = 0.02           # REDUCED from 5% to 2%
         
-        # HFT-Optimized Price Movement Thresholds
-        self.stop_loss_pct = 0.02            # 2.0% price SL (DOWN from 2.5%)
-        self.take_profit_pct = 0.04           # 4% price TP (DOWN from 5%)
-        self.trailing_stop_distance = 0.008  # 0.8% trailing (tighter for HFT) 
+        # SAFE Price Movement Thresholds
+        self.stop_loss_pct = 0.015           # 1.5% price SL (tighter)
+        self.take_profit_pct = 0.03          # 3% price TP  
+        self.trailing_stop_distance = 0.008  # 0.8% trailing
         
-        # HFT-OPTIMIZED Account P&L Thresholds (FASTER PROFITS)
-        self.profit_lock_threshold = 0.15     # 0.15% account (DOWN from 0.3%)
-        self.profit_protection_threshold = 1.0 # 1.0% account (DOWN from 2.5%)
-        self.position_reversal_threshold = -2.0 # -2.0% account (UP from -3.0%)
+        # SAFE Account P&L Thresholds - FIXED CONFLICTS
+        self.profit_lock_threshold = 0.8     # 0.8% account (realistic with 5x leverage)
+        self.profit_protection_threshold = 2.0 # 2.0% account
         
-        # HFT-OPTIMIZED ATR DYNAMIC PROFIT LOCK (MORE AGGRESSIVE)
-        self.base_profit_lock_threshold = 0.1    # 0.1% base (DOWN from 0.2%)
-        self.atr_multiplier = self.config['atr_multiplier']  # From JSON
-        self.min_profit_lock_threshold = 0.08    # 0.08% minimum (DOWN from 0.15%)
-        self.max_profit_lock_threshold = 0.25    # 0.25% maximum (DOWN from 0.6%)
+        # UNIFIED REVERSAL THRESHOLDS - FIXED CONFLICTS
+        self.profit_reversal_threshold = 1.0   # 1.0% profit to reverse
+        self.loss_reversal_threshold = -1.0    # -1.0% loss to reverse
+        self.position_reversal_threshold = -1.5 # -1.5% for other reversals
         
-        # MISSING PROPERTIES - ADDED
-        self.profit_reversal_threshold = 0.5  # 0.5% profit to reverse on opposite signal
-        self.loss_reversal_threshold = -1.5   # -1.5% loss to reverse on opposite signal
+        # SAFE ATR DYNAMIC PROFIT LOCK - UNIFIED
+        self.base_profit_lock_threshold = self.profit_lock_threshold  # UNIFIED - no conflicts
+        self.atr_multiplier = self.config['atr_multiplier']
+        self.min_profit_lock_threshold = 0.5    # 0.5% minimum
+        self.max_profit_lock_threshold = 1.5    # 1.5% maximum
         
-        # HFT-OPTIMIZED Cooldown (FASTER REVERSALS) - From JSON
+        # Cooldown
         self.reversal_cooldown_cycles = self.config['signal_cooldown']
         
-        # Price-based adjustments (same)
+        # Price-based adjustments
         self.low_price_threshold = 0.05
         self.high_price_threshold = 0.08
         self.low_price_multiplier = 0.9
@@ -57,8 +57,8 @@ class RiskManager:
             print(f"Config load error: {e}, using defaults")
             self.config = {
                 'symbol': 'ZORA/USDT',
-                'oversold_level': 35,
-                'overbought_level': 55,
+                'oversold_level': 25,
+                'overbought_level': 75,
                 'signal_cooldown': 2,
                 'atr_multiplier': 1.0
             }
@@ -71,22 +71,22 @@ class RiskManager:
     @property 
     def rsi_oversold(self):
         """Get RSI oversold from config"""
-        return self.config.get('oversold_level', 35)
+        return self.config.get('oversold_level', 25)
     
     @property
     def rsi_overbought(self):
         """Get RSI overbought from config"""
-        return self.config.get('overbought_level', 55)
+        return self.config.get('overbought_level', 75)
     
     @property
     def mfi_oversold(self):
         """Get MFI oversold from config"""
-        return self.config.get('oversold_level', 35)
+        return self.config.get('oversold_level', 25)
     
     @property
     def mfi_overbought(self):
         """Get MFI overbought from config"""
-        return self.config.get('overbought_level', 55)
+        return self.config.get('overbought_level', 75)
     
     def calculate_account_pnl_pct(self, unrealized_pnl, account_balance):
         """Calculate P&L as percentage of total account balance"""
@@ -94,30 +94,23 @@ class RiskManager:
             return 0.0
         return (unrealized_pnl / account_balance) * 100
     
-    def calculate_zora_position_size(self, balance, price, volatility_factor=1.0):
-        """ZORA-specific position sizing with volatility adjustment"""
+    def calculate_position_size(self, balance, price):
+        """Calculate SAFE position size"""
         base_value = balance * self.max_position_size
         
-        # ZORA-specific price level adjustments
+        # ZORA price level adjustments
         if price > self.high_price_threshold:
             base_value *= self.high_price_multiplier
         elif price < self.low_price_threshold:
             base_value *= self.low_price_multiplier
         
-        # Additional volatility adjustment
-        if volatility_factor > 2.0:
-            base_value *= 0.8
-        
         return base_value / price
     
-    def calculate_position_size(self, balance, price):
-        """Calculate position size based on ZORA-optimized risk parameters"""
-        return self.calculate_zora_position_size(balance, price)
-    
     def get_dynamic_profit_lock_threshold(self, atr_pct):
-        """Calculate dynamic profit lock threshold based on ATR"""
+        """Calculate dynamic profit lock threshold based on ATR - UNIFIED"""
         try:
-            dynamic_threshold = self.base_profit_lock_threshold + (atr_pct * self.atr_multiplier)
+            # Use the SAME base threshold to avoid conflicts
+            dynamic_threshold = self.profit_lock_threshold + (atr_pct * self.atr_multiplier * 0.5)
             
             bounded_threshold = max(
                 self.min_profit_lock_threshold,
@@ -146,7 +139,6 @@ class RiskManager:
         """Check if position should reverse on opposite signal"""
         return account_pnl_pct <= self.position_reversal_threshold
     
-    # MISSING METHODS - ADDED
     def should_reverse_for_profit(self, account_pnl_pct):
         """Check if should reverse position for profit"""
         return account_pnl_pct >= self.profit_reversal_threshold
@@ -156,23 +148,15 @@ class RiskManager:
         return account_pnl_pct <= self.loss_reversal_threshold
     
     def is_valid_zora_signal(self, rsi, mfi, trend, volume_ratio=1.0, macd=0, macd_signal=0):
-        """ZORA-specific signal validation - LESS STRICT"""
+        """ZORA-specific signal validation"""
         
-        # Less strict extreme levels (changed from 15/85 to 10/90)
+        # Reject extreme levels
         if rsi > 90 and trend != "DOWN":
-            return False, "ZORA extreme overbought"
+            return False, "Extreme overbought"
         if rsi < 10 and trend != "UP":
-            return False, "ZORA extreme oversold"
+            return False, "Extreme oversold"
         
-        # MACD confirmation for ZORA trades
-        if macd != 0 and macd_signal != 0:
-            macd_bullish = macd > macd_signal
-            if trend == "UP" and not macd_bullish:
-                return False, "MACD bearish divergence"
-            if trend == "DOWN" and macd_bullish:
-                return False, "MACD bullish divergence"
-        
-        return True, "Valid ZORA signal"
+        return True, "Valid signal"
     
     def get_stop_loss(self, entry_price, side='long'):
         """Calculate stop loss price"""
@@ -192,56 +176,27 @@ class RiskManager:
         """Calculate absolute trailing stop distance"""
         return current_price * self.trailing_stop_distance
     
-    def get_price_zone(self, price):
-        """Determine ZORA price zone for risk assessment"""
-        if price > self.high_price_threshold:
-            return "HIGH_RISK (Above $0.08 resistance)"
-        elif price < self.low_price_threshold:
-            return "SUPPORT (Below $0.05)"
-        else:
-            return "NORMAL_RANGE"
-    
     def get_risk_summary(self, balance, current_price, atr_pct=None):
-        """Get comprehensive ZORA-optimized risk summary for display"""
+        """Get SAFE risk summary"""
         position_size = self.calculate_position_size(balance, current_price)
         notional_value = position_size * current_price
         margin_used = notional_value / self.leverage
         
-        # Calculate levels
-        sl_long = self.get_stop_loss(current_price, 'long')
-        sl_short = self.get_stop_loss(current_price, 'short')
-        tp_long = self.get_take_profit(current_price, 'long')
-        tp_short = self.get_take_profit(current_price, 'short')
-        
-        # Get profit lock threshold (dynamic if ATR provided)
-        if atr_pct is not None:
-            profit_lock_threshold = self.get_dynamic_profit_lock_threshold(atr_pct)
-            profit_lock_is_dynamic = True
-        else:
-            profit_lock_threshold = self.profit_lock_threshold
-            profit_lock_is_dynamic = False
+        # ACTUAL RISK CALCULATION
+        max_loss_price = notional_value * self.stop_loss_pct  # Price movement loss
+        actual_account_risk_pct = (max_loss_price / balance) * 100
         
         return {
             'symbol': self.symbol,
-            'optimization': 'ZORA-SPECIFIC',
             'balance': balance,
             'position_size': position_size,
             'notional_value': notional_value,
             'margin_used': margin_used,
-            'margin_pct': (margin_used / balance) * 100,
             'leverage': self.leverage,
-            'stop_loss_long': sl_long,
-            'stop_loss_short': sl_short,
-            'take_profit_long': tp_long,
-            'take_profit_short': tp_short,
-            'profit_lock_threshold': profit_lock_threshold,
+            'actual_account_risk_pct': actual_account_risk_pct,  # REAL RISK
+            'max_account_loss': max_loss_price,
+            'profit_lock_threshold': self.profit_lock_threshold,
             'profit_protection_threshold': self.profit_protection_threshold,
-            'position_reversal_threshold': self.position_reversal_threshold,
-            'trailing_distance_pct': self.trailing_stop_distance * 100,
-            'trailing_distance_abs': self.get_trailing_stop_distance_absolute(current_price),
-            'atr_pct': atr_pct or 0,
-            'profit_lock_is_dynamic': profit_lock_is_dynamic,
-            'rsi_thresholds': f"{self.rsi_oversold}/{self.rsi_overbought}",
-            'mfi_thresholds': f"{self.mfi_oversold}/{self.mfi_overbought}",
-            'price_zone': self.get_price_zone(current_price)
+            'profit_reversal_threshold': self.profit_reversal_threshold,
+            'loss_reversal_threshold': self.loss_reversal_threshold
         }

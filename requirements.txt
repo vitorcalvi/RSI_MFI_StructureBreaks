@@ -1,45 +1,10 @@
-# Core Trading Libraries
-ccxt>=4.1.0
+# Core Dependencies
 pandas>=2.0.0
-numpy<2.0.0
+numpy>=1.21.0,<2.0.0
 python-dotenv>=1.0.0
 
-# Technical Analysis
-ta>=0.10.2
-scikit-learn   
-python-binance 
-# Notifications
-python-telegram-bot>=20.0
-
-# Optimization (for backtesting)
-scikit-optimize>=0.9.0
-scipy>=1.10.0
-
-# Data Storage
-h5py>=3.8.0
-
-# Visualization
-matplotlib>=3.7.0
-
-# Progress & Logging
-tqdm>=4.65.0
-
-# HTTP & Networking
-requests>=2.31.0
-aiohttp>=3.8.0
-
-# Performance
-numba>=0.57.0
-
-# Terminal Colors & Formatting
-colorama
-
-# Bybit API
+# Trading API
 pybit
 
-# Ray Tune (for optimization)
-ray[tune]
-
-# VectorBT (for backtesting)
-vectorbt
-
+# Notifications
+python-telegram-bot>=20.0
