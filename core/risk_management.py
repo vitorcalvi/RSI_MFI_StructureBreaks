@@ -5,15 +5,15 @@ class RiskManager:
     def __init__(self):
         self._load_config()
         
-        self.leverage = 25                      # FIXED: 25x to trigger conditions to test 
-        self.max_position_size = 0.002          # FIXED: 0.2% for 5% total risk with 25x leverage
+        self.leverage = 25                      # 25x leverage
+        self.max_position_size = 0.002          # 0.2% for 5% total risk with 25x leverage
         self.stop_loss_pct = 0.015              # 1.5% stop loss distance
         self.trailing_stop_distance = 0.01      # 1% trailing distance
         
-        # Risk thresholds (based on wallet balance P&L)
-        self.profit_lock_threshold = 0.5        # 0.5% wallet P&L to activate trailing
-        self.profit_protection_threshold = 2.0  # 2.0% wallet P&L to close
-        self.loss_reversal_threshold = -1.0     # -1.0% wallet P&L to reverse
+        # FIXED: Risk thresholds based on ROE (leveraged P&L percentage)
+        self.profit_lock_threshold = 0.5        # 0.5% ROE to activate trailing
+        self.profit_protection_threshold = 2.0  # 2.0% ROE to close
+        self.loss_reversal_threshold = -1.0     # -1.0% ROE to reverse
         
         # Cooldown cycles
         self.reversal_cooldown_cycles = self.config.get('signal_cooldown', 2)
@@ -37,19 +37,21 @@ class RiskManager:
         """Calculate actual risk percentage per trade"""
         position_value = balance * self.max_position_size
         max_loss = position_value * self.stop_loss_pct
-        return (max_loss / balance) * 100
+        risk_pct = (max_loss / balance) * 100
+        print(f"🔍 Risk Debug: Position: ${position_value:.2f}, Max Loss: ${max_loss:.2f}, Risk: {risk_pct:.4f}%")
+        return risk_pct
     
-    def should_activate_profit_lock(self, wallet_pnl_pct):
-        """Activate profit lock at 0.5% wallet P&L"""
-        return wallet_pnl_pct >= self.profit_lock_threshold
+    def should_activate_profit_lock(self, roe_pct):
+        """Activate profit lock at 0.5% ROE"""
+        return roe_pct >= self.profit_lock_threshold
     
-    def should_take_profit_protection(self, wallet_pnl_pct):
-        """HIGHEST PRIORITY - Close at 2.0% wallet P&L"""
-        return wallet_pnl_pct >= self.profit_protection_threshold
+    def should_take_profit_protection(self, roe_pct):
+        """HIGHEST PRIORITY - Close at 2.0% ROE"""
+        return roe_pct >= self.profit_protection_threshold
     
-    def should_reverse_for_loss(self, wallet_pnl_pct):
+    def should_reverse_for_loss(self, roe_pct):
         """Only reverse on loss - NOT profit"""
-        return wallet_pnl_pct <= self.loss_reversal_threshold
+        return roe_pct <= self.loss_reversal_threshold
     
     def get_stop_loss(self, entry_price, side='long'):
         """Calculate stop loss price"""
@@ -62,13 +64,13 @@ class RiskManager:
         """Calculate absolute trailing stop distance"""
         return current_price * self.trailing_stop_distance
     
-    def get_risk_zone(self, wallet_pnl_pct):
+    def get_risk_zone(self, roe_pct):
         """Return current risk zone for display"""
-        if wallet_pnl_pct >= self.profit_protection_threshold:
+        if roe_pct >= self.profit_protection_threshold:
             return "PROFIT_PROTECTION"
-        elif wallet_pnl_pct >= self.profit_lock_threshold:
+        elif roe_pct >= self.profit_lock_threshold:
             return "PROFIT_LOCK"
-        elif wallet_pnl_pct <= self.loss_reversal_threshold:
+        elif roe_pct <= self.loss_reversal_threshold:
             return "LOSS_REVERSAL"
         else:
             return "NORMAL"

@@ -120,23 +120,25 @@ class TradeEngine:
                 position_size = float(position['size'])
                 
                 if position_size > 0:
+                    # Get values from API
                     unrealized_pnl = float(position['unrealisedPnl'])
                     avg_price = float(position['avgPrice'])
-                    
-                    # FIXED: Calculate P&L percentage based on WALLET BALANCE (not margin)
-                    wallet_balance = self.get_wallet_balance_only()
-                    pnl_pct = (unrealized_pnl / wallet_balance) * 100 if wallet_balance > 0 else 0
+                    side = position['side']
                     
                     # Calculate position metrics
                     position_value = position_size * avg_price
                     margin_used = position_value / self.risk_manager.leverage
                     
+                    # FIXED: Calculate ROE (Return on Equity) - leveraged P&L percentage
+                    roe_pct = (unrealized_pnl / margin_used) * 100 if margin_used > 0 else 0
+                    
+                    
                     self.position = {
-                        'side': position['side'],
+                        'side': side,
                         'size': position_size,
                         'avg_price': avg_price,
                         'unrealized_pnl': unrealized_pnl,
-                        'unrealized_pnl_pct': pnl_pct,  # NOW CORRECT
+                        'unrealized_pnl_pct': roe_pct,  # Now ROE percentage
                         'margin_used': margin_used,
                         'position_value': position_value
                     }
@@ -184,25 +186,25 @@ class TradeEngine:
         return f"{price:.{decimals}f}"
 
     async def handle_risk_management(self, current_price):
-        """Risk management with correct P&L calculation"""
+        """Risk management with ROE-based thresholds"""
         if not self.position:
             return
             
-        pnl_pct = self.position['unrealized_pnl_pct']
+        roe_pct = self.position['unrealized_pnl_pct']
         
         # PRIORITY 1: Profit Protection (HIGHEST)
-        if self.risk_manager.should_take_profit_protection(pnl_pct):
-            print(f"\n💰 PROFIT PROTECTION: {pnl_pct:.2f}%")
+        if self.risk_manager.should_take_profit_protection(roe_pct):
+            print(f"\n💰 PROFIT PROTECTION: {roe_pct:.2f}% ROE")
             await self.close_position("Profit Protection")
             return
         
         # PRIORITY 2: Profit Lock (only if no protection)
-        if not self.profit_lock_active and self.risk_manager.should_activate_profit_lock(pnl_pct):
+        if not self.profit_lock_active and self.risk_manager.should_activate_profit_lock(roe_pct):
             self.profit_lock_active = True
-            print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}%")
+            print(f"\n🔓 PROFIT LOCK ACTIVATED! ROE: {roe_pct:.2f}%")
             
             await self.notifier.profit_lock_activated(
-                self.symbol, pnl_pct, self.risk_manager.trailing_stop_distance * 100
+                self.symbol, roe_pct, self.risk_manager.trailing_stop_distance * 100
             )
             
             await self._set_trailing_stop(current_price)
@@ -252,7 +254,10 @@ class TradeEngine:
                 print(f"❌ Order failed: {order.get('retMsg')}")
                 return False
             
-            # FIXED: Set stop loss immediately (no delay)
+            # Wait a moment for position to be created
+            await asyncio.sleep(2)
+            
+            # Set stop loss
             await self._set_stop_loss(signal, current_price, info)
             
             self.profit_lock_active = False
@@ -307,12 +312,12 @@ class TradeEngine:
                 return False
             
             # Handle cooldown for loss reversals only
-            pnl_pct = self.position.get('unrealized_pnl_pct', 0)
+            roe_pct = self.position.get('unrealized_pnl_pct', 0)
             if reason == "Loss Reversal":
                 self.reversal_cooldown_cycles = self.risk_manager.reversal_cooldown_cycles
             
             pnl = self.position.get('unrealized_pnl', 0)
-            await self.notifier.trade_closed(self.symbol, pnl_pct, pnl, reason)
+            await self.notifier.trade_closed(self.symbol, roe_pct, pnl, reason)
             
             self.position = None
             self.profit_lock_active = False
@@ -334,7 +339,7 @@ class TradeEngine:
     async def _handle_signal_with_position(self, signal):
         """Only reverse on loss, no profit reversals"""
         current_side = self.position['side']
-        pnl_pct = self.position['unrealized_pnl_pct']
+        roe_pct = self.position['unrealized_pnl_pct']
         signal_action = signal['action']
         
         # Check if signal is opposite
@@ -345,10 +350,10 @@ class TradeEngine:
         
         if should_reverse:
             # Only reverse on loss - no profit reversals
-            if self.risk_manager.should_reverse_for_loss(pnl_pct):
-                print(f"\n🔄 Reversing losing position: {pnl_pct:.2f}%")
+            if self.risk_manager.should_reverse_for_loss(roe_pct):
+                print(f"\n🔄 Reversing losing position: {roe_pct:.2f}% ROE")
                 await self.close_position("Loss Reversal")
-                await asyncio.sleep(1)  # Reduced delay
+                await asyncio.sleep(1)
                 await self.open_position(signal)
     
     async def _handle_signal_no_position(self, signal):
@@ -384,7 +389,7 @@ class TradeEngine:
             self._display_status(df, current_price)
             
             # Handle signals (only if position still exists after risk management)
-            if self.position or not position:  # If no position or position still exists
+            if self.position or not position:
                 await self.handle_signal(signal)
                 
         except Exception as e:
@@ -400,8 +405,8 @@ class TradeEngine:
         # Position info with risk zone
         position_info = 'None'
         if self.position:
-            pnl_pct = self.position['unrealized_pnl_pct']
-            risk_zone = self.risk_manager.get_risk_zone(pnl_pct)
+            roe_pct = self.position['unrealized_pnl_pct']
+            risk_zone = self.risk_manager.get_risk_zone(roe_pct)
             zone_emoji = {
                 'PROFIT_PROTECTION': '💰',
                 'PROFIT_LOCK': '🔒',
@@ -409,7 +414,7 @@ class TradeEngine:
                 'NORMAL': ''
             }.get(risk_zone, '')
             
-            position_info = f"{self.position['side']} ({pnl_pct:+.2f}%) {zone_emoji}"
+            position_info = f"{self.position['side']} ({roe_pct:+.2f}%) {zone_emoji}"
         
         # Trend display
         trend_emoji = {"UP": "🟢", "DOWN": "🔴", "SIDEWAYS": "🟡"}.get(current_trend, "⚪")
