@@ -18,8 +18,8 @@ class TradeEngine:
         self.strategy = RSIMFICloudStrategy()
         self.notifier = TelegramNotifier()
         
-        # Configuration
-        self.symbol = self.risk_manager.symbol
+        # Configuration (use centralized symbol)
+        self.symbol = self.strategy.symbol  # From JSON config
         self.linear = self.symbol.replace('/', '')
         self.timeframe = '5'
         self.demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
@@ -41,10 +41,6 @@ class TradeEngine:
         self.last_trailing_update = None
         self.current_atr_pct = 0
         
-    # ==========================================
-    # CONNECTION & SETUP (Single Responsibility)
-    # ==========================================
-    
     def connect(self):
         """Initialize exchange connection"""
         try:
@@ -84,10 +80,6 @@ class TradeEngine:
                 print(f"⚠️ Leverage: {resp.get('retMsg')}")
         except Exception as e:
             print(f"⚠️ Leverage error: {str(e)[:30]}...")
-    
-    # ==========================================
-    # MARKET DATA (Single Responsibility)
-    # ==========================================
     
     def get_market_data(self):
         """Fetch market data"""
@@ -143,10 +135,6 @@ class TradeEngine:
             print("⚠️ Cannot get current price")
             return None
     
-    # ==========================================
-    # ACCOUNT & BALANCE (Single Responsibility)
-    # ==========================================
-    
     def get_account_balance(self):
         """Get USDT balance"""
         try:
@@ -159,10 +147,6 @@ class TradeEngine:
         except Exception as e:
             print(f"❌ Balance error: {e}")
             return 0
-
-    # ==========================================
-    # POSITION MANAGEMENT (Single Responsibility)
-    # ==========================================
 
     def check_position(self):
         """Check current position"""
@@ -207,10 +191,6 @@ class TradeEngine:
         self.position = None
         self.profit_lock_active = False
     
-    # ==========================================
-    # ORDER UTILITIES (Single Responsibility)
-    # ==========================================
-    
     def get_symbol_info(self):
         """Get symbol trading rules"""
         try:
@@ -245,10 +225,6 @@ class TradeEngine:
         tick_str = f"{tick:.20f}".rstrip('0').rstrip('.')
         decimals = len(tick_str.split('.')[1]) if '.' in tick_str else 0
         return f"{price:.{decimals}f}"
-
-    # ==========================================
-    # RISK MANAGEMENT CHECKS (Single Responsibility)
-    # ==========================================
 
     async def check_profit_protection(self):
         """Check profit protection only"""
@@ -322,10 +298,6 @@ class TradeEngine:
                 print(f"✅ Trailing stop set: {formatted_trailing_distance} distance")
             else:
                 print(f"❌ Trailing stop failed: {resp.get('retMsg')}")
-
-    # ==========================================
-    # ORDER EXECUTION (Single Responsibility)
-    # ==========================================
 
     async def open_position(self, signal):
         """Open position"""
@@ -449,10 +421,6 @@ class TradeEngine:
         
         await self.notifier.trade_closed(self.symbol, pnl_pct, pnl, reason)
         self._clear_position_state()
-
-    # ==========================================
-    # SIGNAL PROCESSING (Single Responsibility)
-    # ==========================================
     
     def extract_indicators(self, df):
         """Extract current indicators from market data"""
@@ -584,10 +552,6 @@ class TradeEngine:
             print(f"\n🎯 ZORA Signal: {signal['action']} @ ${signal['price']:.4f}{atr_info}")
             await self.open_position(signal)
 
-    # ==========================================
-    # STATUS DISPLAY (Single Responsibility)
-    # ==========================================
-    
     def create_status_display(self, current_price, current_rsi, current_mfi, current_trend):
         """Create status display string"""
         # Position info
@@ -631,10 +595,6 @@ class TradeEngine:
                 f"{trend_emoji}{current_trend} | {atr_display} | {lock_display} | "
                 f"{position_info}{cooldown_info}")
 
-    # ==========================================
-    # MAIN TRADING CYCLE (Single Responsibility)
-    # ==========================================
-
     async def run_cycle(self):
         """Main trading cycle - CLEAN and focused"""
         try:
@@ -673,10 +633,6 @@ class TradeEngine:
                 
         except Exception as e:
             print(f"\n❌ Cycle error: {e}")
-
-    # ==========================================
-    # MAIN EXECUTION (Single Responsibility)
-    # ==========================================
     
     async def run(self):
         """Main trading loop"""

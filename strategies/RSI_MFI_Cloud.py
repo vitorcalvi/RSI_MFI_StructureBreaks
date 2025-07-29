@@ -5,32 +5,55 @@ import numpy as np
 
 class RSIMFICloudStrategy:
     def __init__(self):
-        # Trading Symbol
-        self.symbol = "ZORA/USDT"
-        
-        # ATR Configuration
-        self.atr_period = 14
-        
-        # Signal Management
-        self.signal_cooldown_period = 5
-        
-        # Load strategy parameters
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        params_file = os.path.join(current_dir, 'params_RSI_MFI_Cloud.json')
-        with open(params_file, 'r') as f:
-            self.params = json.load(f)
+        # Load strategy parameters (centralized config)
+        self._load_config()
         
         # Runtime variables (ONLY for strategy logic)
         self.last_signal = None
         self.signal_cooldown = 0
         self.current_atr_pct = 0  # For risk management integration
-        
-    # ==========================================
-    # INDICATOR CALCULATIONS (Single Responsibility)
-    # ==========================================
     
-    def calculate_rsi(self, prices, period=7):
+    def _load_config(self):
+        """Load configuration from JSON"""
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            params_file = os.path.join(current_dir, 'params_RSI_MFI_Cloud.json')
+            with open(params_file, 'r') as f:
+                self.params = json.load(f)
+        except Exception as e:
+            print(f"Config load error: {e}, using defaults")
+            self.params = {
+                'symbol': 'ZORA/USDT',
+                'rsi_length': 7,
+                'mfi_length': 7,
+                'atr_period': 14,
+                'oversold_level': 35,
+                'overbought_level': 55,
+                'atr_multiplier': 1.0,
+                'signal_cooldown': 2,
+                'require_trend': True
+            }
+    
+    @property
+    def symbol(self):
+        """Get symbol from config"""
+        return self.params.get('symbol', 'ZORA/USDT')
+    
+    @property
+    def atr_period(self):
+        """Get ATR period from config"""
+        return self.params.get('atr_period', 14)
+    
+    @property
+    def signal_cooldown_period(self):
+        """Get signal cooldown from config"""
+        return self.params.get('signal_cooldown', 2)
+    
+    def calculate_rsi(self, prices, period=None):
         """Calculate RSI"""
+        if period is None:
+            period = self.params['rsi_length']
+            
         try:
             if len(prices) < period + 1:
                 return pd.Series([50] * len(prices), index=prices.index)
@@ -53,8 +76,11 @@ class RSIMFICloudStrategy:
             print(f"RSI error: {e}")
             return pd.Series([50] * len(prices), index=prices.index)
     
-    def calculate_mfi(self, high, low, close, period=7):
+    def calculate_mfi(self, high, low, close, period=None):
         """Calculate MFI without volume"""
+        if period is None:
+            period = self.params['mfi_length']
+            
         try:
             if len(close) < period + 1:
                 return pd.Series([50] * len(close), index=close.index)
@@ -135,10 +161,6 @@ class RSIMFICloudStrategy:
             print(f"ATR error: {e}")
             return pd.Series([0] * len(df), index=df.index)
     
-    # ==========================================
-    # INDICATOR AGGREGATION (Single Responsibility)
-    # ==========================================
-    
     def calculate_indicators(self, df):
         """Calculate all indicators"""
         df = df.copy()
@@ -147,20 +169,13 @@ class RSIMFICloudStrategy:
             return df
             
         # Calculate indicators
-        df['rsi'] = self.calculate_rsi(df['close'], self.params['rsi_length'])
-        df['mfi'] = self.calculate_mfi(
-            df['high'], df['low'], df['close'],
-            self.params['mfi_length']
-        )
+        df['rsi'] = self.calculate_rsi(df['close'])
+        df['mfi'] = self.calculate_mfi(df['high'], df['low'], df['close'])
         df['trend'] = self.calculate_trend(df['close'])
         df['price_change'] = df['close'].pct_change(fill_method=None)
         df['atr'] = self.calculate_atr(df)
         
         return df
-    
-    # ==========================================
-    # SIGNAL VALIDATION (Single Responsibility)
-    # ==========================================
     
     def validate_signal_conditions(self, current_rsi, current_mfi, current_trend, oversold, overbought):
         """Validate signal conditions"""
@@ -191,10 +206,6 @@ class RSIMFICloudStrategy:
         """Update signal state after signal generation"""
         self.last_signal = signal_type
         self.signal_cooldown = self.signal_cooldown_period
-    
-    # ==========================================
-    # SIGNAL GENERATION (Single Responsibility)
-    # ==========================================
     
     def generate_signal(self, df):
         """Generate trading signals - PURE STRATEGY LOGIC ONLY"""

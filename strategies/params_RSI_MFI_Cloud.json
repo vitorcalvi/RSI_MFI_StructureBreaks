@@ -1,6 +1,8 @@
 {
+  "symbol": "ZORA/USDT",
   "rsi_length": 7,
   "mfi_length": 7,
+  "atr_period": 14,
   "oversold_level": 35,
   "overbought_level": 55,
   "atr_multiplier": 1.0,
