@@ -6,7 +6,8 @@ python-dotenv>=1.0.0
 
 # Technical Analysis
 ta>=0.10.2
-
+scikit-learn   
+python-binance 
 # Notifications
 python-telegram-bot>=20.0
 
