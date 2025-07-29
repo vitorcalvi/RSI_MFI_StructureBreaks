@@ -27,6 +27,7 @@ class RSIMFICloudStrategy:
         self.trailing_stop = None
         self.position_type = None
         self.entry_price = None
+        self.current_atr_pct = 0  # For risk management integration
         
     def calculate_rsi(self, prices, period=7):
         """Calculate RSI"""
@@ -210,6 +211,12 @@ class RSIMFICloudStrategy:
         current_price = df['close'].iloc[-1]
         current_trend = df['trend'].iloc[-1]
         current_atr = df['atr'].iloc[-1]
+        
+        # Update ATR percentage for risk management integration
+        if current_price > 0 and current_atr > 0:
+            self.current_atr_pct = (current_atr / current_price) * 100
+        else:
+            self.current_atr_pct = 0
         
         # Validate
         if pd.isna(current_rsi) or pd.isna(current_mfi) or pd.isna(current_price) or pd.isna(current_atr):

@@ -27,21 +27,6 @@ def display_risk_summary(engine, balance, current_price):
     print(f"📈 Position Size: {engine.risk_manager.max_position_size*100:.1f}% per trade")
     print(f"🎯 Risk per Trade: {engine.risk_manager.risk_per_trade*100:.1f}%")
     
-    print(f"\n📋 PRICE LEVELS @ ${current_price:.4f}:")
-    print("-" * 40)
-    
-    # Long levels
-    print("📈 LONG:")
-    print(f"   🛑 Stop Loss: ${risk_summary['stop_loss_long']:.4f} ({engine.risk_manager.stop_loss_pct*100:.1f}% price move)")
-    print(f"   🎯 Take Profit: ${risk_summary['take_profit_long']:.4f} ({engine.risk_manager.take_profit_pct*100:.1f}% price move)")
-    print(f"   🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.1f}% account P&L")
-    
-    # Short levels
-    print("\n📉 SHORT:")
-    print(f"   🛑 Stop Loss: ${risk_summary['stop_loss_short']:.4f} ({engine.risk_manager.stop_loss_pct*100:.1f}% price move)")
-    print(f"   🎯 Take Profit: ${risk_summary['take_profit_short']:.4f} ({engine.risk_manager.take_profit_pct*100:.1f}% price move)")
-    print(f"   🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.1f}% account P&L")
-    
     # Analysis
     print(f"\n⚖️ RISK ANALYSIS:")
     print("-" * 40)
@@ -49,8 +34,23 @@ def display_risk_summary(engine, balance, current_price):
     print(f"💳 Margin Used: ${risk_summary['margin_used']:,.2f} USDT ({risk_summary['margin_pct']:.1f}%)")
     print(f"🎯 Risk/Reward: 1:{engine.risk_manager.take_profit_pct / engine.risk_manager.stop_loss_pct:.1f}")
     print(f"🔒 Trailing Distance: {risk_summary['trailing_distance_pct']:.1f}%")
-    print(f"🔄 Loss Switch: {engine.risk_manager.loss_switch_threshold:.0f}% account P&L")
     print(f"💰 Profit Protection: {engine.risk_manager.profit_protection_threshold:.0f}% account P&L")
+    
+    # Risk Thresholds Summary
+    print(f"\n🚨 RISK THRESHOLDS:")
+    print("-" * 40)
+    
+    # Show dynamic or static profit lock threshold
+    if risk_summary['profit_lock_is_dynamic'] and risk_summary['atr_pct'] > 0:
+        print(f"🔓 Profit Lock: {risk_summary['profit_lock_threshold']:.1f}% account (ATR-Dynamic) → Activate trailing stop")
+        print(f"📊 ATR Volatility: {risk_summary['atr_pct']:.2f}%")
+    else:
+        print(f"🔓 Profit Lock: {risk_summary['profit_lock_threshold']:.1f}% account (Static) → Activate trailing stop")
+    
+    print(f"💰 Profit Protection: {engine.risk_manager.profit_protection_threshold:.1f}% account → Take profit & cooldown")
+    print(f"🔄 Position Reversal: {engine.risk_manager.position_reversal_threshold:.1f}% account → Reverse on signal")
+    print(f"🚨 Loss Switch: {engine.risk_manager.loss_switch_threshold:.1f}% account → Force reverse")
+    print(f"⏸️ Cooldown: {engine.risk_manager.reversal_cooldown_cycles} cycles after profit protection")
     
     # Strategy
     print(f"\n🎮 STRATEGY:")
@@ -62,14 +62,14 @@ def display_risk_summary(engine, balance, current_price):
     print(f"🎯 Trend Filter: {'ON' if engine.strategy.params.get('require_trend', False) else 'OFF'}")
     print(f"⏱️ Timeframe: {engine.timeframe}m")
     
-    # Risk Thresholds Summary
-    print(f"\n🚨 RISK THRESHOLDS:")
-    print("-" * 40)
-    print(f"🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.1f}% account → Activate trailing stop")
-    print(f"💰 Profit Protection: {engine.risk_manager.profit_protection_threshold:.1f}% account → Take profit & cooldown")
-    print(f"🔄 Position Reversal: {engine.risk_manager.position_reversal_threshold:.1f}% account → Reverse on signal")
-    print(f"🚨 Loss Switch: {engine.risk_manager.loss_switch_threshold:.1f}% account → Force reverse")
-    print(f"⏸️ Cooldown: {engine.risk_manager.reversal_cooldown_cycles} cycles after profit protection")
+    # ATR Dynamic Settings (if available)
+    if hasattr(engine.risk_manager, 'atr_multiplier'):
+        print(f"\n🔄 ATR DYNAMIC SETTINGS:")
+        print("-" * 40)
+        print(f"📊 Base Profit Lock: {engine.risk_manager.base_profit_lock_threshold:.1f}%")
+        print(f"⚡ ATR Multiplier: {engine.risk_manager.atr_multiplier:.1f}x")
+        print(f"🔽 Min Threshold: {engine.risk_manager.min_profit_lock_threshold:.1f}%")
+        print(f"🔼 Max Threshold: {engine.risk_manager.max_profit_lock_threshold:.1f}%")
     
     print("=" * 60)
 
