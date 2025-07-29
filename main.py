@@ -26,7 +26,7 @@ def display_accurate_info(engine, balance, current_price):
     print(f"📊 Margin Used: ${risk_summary['margin_used']:.2f} ({(risk_summary['margin_used']/balance)*100:.1f}% of balance)")
     print(f"🎯 Notional Value: ${risk_summary['notional_value']:.2f}")
     
-    print(f"\n🔒 PROFIT MANAGEMENT:")
+    print(f"\n🔒 PROFIT MANAGEMENT (NO TAKE PROFIT - HOLD UNTIL SIGNAL):")
     print(f"🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.1f}% account → Trailing stop")
     print(f"💰 Profit Protection: {engine.risk_manager.profit_protection_threshold:.1f}% account → Close position")
     

@@ -19,7 +19,7 @@ class RiskManager:
         
         # SAFE Price Movement Thresholds
         self.stop_loss_pct = 0.015           # 1.5% price SL (tighter)
-        self.take_profit_pct = 0.03          # 3% price TP  
+        # REMOVED: take_profit_pct - Project holds until signal/protection (no TP)
         self.trailing_stop_distance = 0.008  # 0.8% trailing
         
         # SAFE Account P&L Thresholds - FIXED CONFLICTS
@@ -165,12 +165,7 @@ class RiskManager:
         else:
             return entry_price * (1 + self.stop_loss_pct)
     
-    def get_take_profit(self, entry_price, side='long'):
-        """Calculate take profit price"""
-        if side == 'long':
-            return entry_price * (1 + self.take_profit_pct)
-        else:
-            return entry_price * (1 - self.take_profit_pct)
+    # REMOVED: get_take_profit() - Project doesn't use TP, holds until signal/protection
     
     def get_trailing_stop_distance_absolute(self, current_price):
         """Calculate absolute trailing stop distance"""

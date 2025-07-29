@@ -323,7 +323,7 @@ class TradeEngine:
             if not success:
                 return False
             
-            # Set initial stops
+            # Set ONLY stop loss - NO TAKE PROFIT
             await self._set_initial_stops(signal, current_price, info)
             
             # Notify and update state
@@ -353,27 +353,26 @@ class TradeEngine:
         return True
     
     async def _set_initial_stops(self, signal, current_price, info):
-        """Set initial stop loss and take profit"""
+        """Set ONLY stop loss - NO TAKE PROFIT"""
         try:
+            # Calculate ONLY stop loss
             if signal['action'] == 'BUY':
                 sl = self.risk_manager.get_stop_loss(current_price, 'long')
-                tp = self.risk_manager.get_take_profit(current_price, 'long')
             else:
                 sl = self.risk_manager.get_stop_loss(current_price, 'short')
-                tp = self.risk_manager.get_take_profit(current_price, 'short')
             
+            # Set ONLY stop loss - NO TP
             stop_resp = self.exchange.set_trading_stop(
                 category="linear",
                 symbol=self.linear,
                 positionIdx=0,
                 stopLoss=self.format_price(info, sl),
-                takeProfit=self.format_price(info, tp),
-                slTriggerBy="LastPrice",
-                tpTriggerBy="LastPrice"
+                slTriggerBy="LastPrice"
+                # NO takeProfit parameter - REMOVED COMPLETELY
             )
             
             if stop_resp.get('retCode') == 0:
-                print(f"✅ Initial stops set - SL: ${sl:.6f}, TP: ${tp:.6f}")
+                print(f"✅ Stop Loss set: ${sl:.6f} (NO TP - Hold until signal/protection)")
             else:
                 print(f"⚠️ Stop setting failed: {stop_resp.get('retMsg')} (continuing)")
                 
@@ -580,8 +579,14 @@ class TradeEngine:
             else:
                 position_info = 'None'
         
-        # Trend emoji
-        trend_emoji = {"UP": "🟢", "DOWN": "🔴", "SIDEWAYS": "🟡", "UNKNOWN": "⚪"}.get(current_trend, "⚪")
+        # Trend emoji with indicator explanation - FIXED
+        trend_indicators = {
+            "UP": "🟢 EMA12>EMA26", 
+            "DOWN": "🔴 EMA12<EMA26", 
+            "SIDEWAYS": "🟡 EMA12≈EMA26", 
+            "UNKNOWN": "⚪ Unknown"
+        }
+        trend_display = trend_indicators.get(current_trend, "⚪Unknown")
         
         # ATR and Lock threshold display
         if self.current_atr_pct > 0:
@@ -594,7 +599,7 @@ class TradeEngine:
         
         return (f"[{datetime.now().strftime('%H:%M:%S')}] "
                 f"${current_price:.4f} | RSI:{current_rsi:.1f} | MFI:{current_mfi:.1f} | "
-                f"{trend_emoji}{current_trend} | {atr_display} | {lock_display} | "
+                f"{trend_display} | {atr_display} | {lock_display} | "
                 f"{position_info}{cooldown_info}")
 
     async def run_cycle(self):
