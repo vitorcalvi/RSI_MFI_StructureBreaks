@@ -41,10 +41,13 @@ class TradeEngine:
         self.last_trailing_update = None
         self.current_atr_pct = 0
         
+    # ==========================================
+    # CONNECTION & SETUP (Single Responsibility)
+    # ==========================================
+    
     def connect(self):
         """Initialize exchange connection"""
         try:
-            print("✅ Connecting to Bybit...")
             self.exchange = HTTP(
                 demo=self.demo_mode,
                 api_key=self.api_key,
@@ -53,7 +56,8 @@ class TradeEngine:
             
             server_time = self.exchange.get_server_time()
             if server_time.get('retCode') == 0:
-                print(f"✅ Connected to Bybit {'Testnet' if self.demo_mode else 'Live'}")
+                mode = "Testnet" if self.demo_mode else "Live"
+                print(f"✅ Connected to Bybit {mode}")
                 self.set_leverage()
                 return True
             else:
@@ -66,7 +70,6 @@ class TradeEngine:
     def set_leverage(self):
         """Set leverage with error handling"""
         try:
-            print(f"🔧 Setting leverage to {self.risk_manager.leverage}x...")
             resp = self.exchange.set_leverage(
                 category="linear",
                 symbol=self.linear,
@@ -76,11 +79,15 @@ class TradeEngine:
             
             ret_code = resp.get('retCode', 0)
             if ret_code in [0, 110043, 110036]:
-                print(f"✅ Leverage set to {self.risk_manager.leverage}x")
+                pass  # Leverage set successfully or already set
             else:
-                print(f"ℹ️ Leverage: {resp.get('retMsg')} (continuing)")
+                print(f"⚠️ Leverage: {resp.get('retMsg')}")
         except Exception as e:
-            print(f"ℹ️ Leverage setting skipped: {str(e)[:50]}... (continuing)")
+            print(f"⚠️ Leverage error: {str(e)[:30]}...")
+    
+    # ==========================================
+    # MARKET DATA (Single Responsibility)
+    # ==========================================
     
     def get_market_data(self):
         """Fetch market data"""
@@ -105,23 +112,40 @@ class TradeEngine:
                 print("❌ Empty market data")
                 return None
             
-            df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'].astype(float), unit='ms')
-            df = df.set_index('timestamp')
+            return self._process_market_data(data)
             
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-                df[col] = pd.to_numeric(df[col])
-            
-            df = df.sort_index()
-            
-            if df.empty:
-                print("❌ Empty DataFrame after processing")
-                return None
-                
-            return df
         except Exception as e:
             print(f"❌ Market data error: {e}")
             return None
+    
+    def _process_market_data(self, data):
+        """Process raw market data into DataFrame"""
+        df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'].astype(float), unit='ms')
+        df = df.set_index('timestamp')
+        
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = pd.to_numeric(df[col])
+        
+        df = df.sort_index()
+        
+        if df.empty:
+            print("❌ Empty DataFrame after processing")
+            return None
+            
+        return df
+    
+    def get_current_price(self, df):
+        """Extract current price from market data"""
+        try:
+            return df['close'].iloc[-1]
+        except (IndexError, KeyError):
+            print("⚠️ Cannot get current price")
+            return None
+    
+    # ==========================================
+    # ACCOUNT & BALANCE (Single Responsibility)
+    # ==========================================
     
     def get_account_balance(self):
         """Get USDT balance"""
@@ -136,6 +160,10 @@ class TradeEngine:
             print(f"❌ Balance error: {e}")
             return 0
 
+    # ==========================================
+    # POSITION MANAGEMENT (Single Responsibility)
+    # ==========================================
+
     def check_position(self):
         """Check current position"""
         try:
@@ -145,30 +173,43 @@ class TradeEngine:
                 position_size = float(position['size'])
                 
                 if position_size > 0:
-                    avg_price = float(position['avgPrice'])
-                    unrealized_pnl = float(position['unrealisedPnl'])
-                    
-                    balance = self.get_account_balance()
-                    pnl_pct = self.risk_manager.calculate_account_pnl_pct(unrealized_pnl, balance)
-                    
-                    self.position = {
-                        'side': position['side'],
-                        'size': position_size,
-                        'avg_price': avg_price,
-                        'unrealized_pnl': unrealized_pnl,
-                        'unrealized_pnl_pct': pnl_pct
-                    }
-                    return self.position
+                    return self._build_position_data(position)
             
             # No position
             if self.position is not None:
                 print(f"\n📉 Position closed")
-            self.position = None
-            self.profit_lock_active = False
+            self._clear_position_state()
             return None
+            
         except Exception as e:
             print(f"❌ Position check error: {e}")
             return None
+    
+    def _build_position_data(self, position):
+        """Build position data structure"""
+        avg_price = float(position['avgPrice'])
+        unrealized_pnl = float(position['unrealisedPnl'])
+        
+        balance = self.get_account_balance()
+        pnl_pct = self.risk_manager.calculate_account_pnl_pct(unrealized_pnl, balance)
+        
+        self.position = {
+            'side': position['side'],
+            'size': float(position['size']),
+            'avg_price': avg_price,
+            'unrealized_pnl': unrealized_pnl,
+            'unrealized_pnl_pct': pnl_pct
+        }
+        return self.position
+    
+    def _clear_position_state(self):
+        """Clear position-related state"""
+        self.position = None
+        self.profit_lock_active = False
+    
+    # ==========================================
+    # ORDER UTILITIES (Single Responsibility)
+    # ==========================================
     
     def get_symbol_info(self):
         """Get symbol trading rules"""
@@ -205,42 +246,9 @@ class TradeEngine:
         decimals = len(tick_str.split('.')[1]) if '.' in tick_str else 0
         return f"{price:.{decimals}f}"
 
-    async def check_loss_switch(self):
-        """Switch position when loss threshold reached"""
-        if not self.position:
-            return
-            
-        pnl_pct = self.position['unrealized_pnl_pct']
-        
-        if self.risk_manager.should_switch_position(pnl_pct):
-            current_side = self.position['side']
-            new_side = 'SELL' if current_side == 'Buy' else 'BUY'
-            
-            print(f"\n⚠️ Loss threshold reached: {pnl_pct:.2f}% (limit: {self.risk_manager.loss_switch_threshold}%)")
-            print(f"🔄 Switching to {new_side}")
-            
-            await self.close_position("Loss Limit")
-            await asyncio.sleep(2)
-            
-            ticker = self.exchange.get_tickers(category="linear", symbol=self.linear)
-            current_price = float(ticker['result']['list'][0]['lastPrice'])
-            
-            switch_signal = {
-                'action': new_side,
-                'price': current_price,
-                'rsi': 50,
-                'mfi': 50,
-                'trend': 'LOSS_SWITCH',
-                'timestamp': pd.Timestamp.now(),
-                'confidence': 'LOSS_SWITCH'
-            }
-            
-            success = await self.open_position(switch_signal)
-            if success:
-                await self.notifier.position_switched(
-                    self.symbol, current_side, new_side,
-                    self.position['size'], pnl_pct, self.position['unrealized_pnl']
-                )
+    # ==========================================
+    # RISK MANAGEMENT CHECKS (Single Responsibility)
+    # ==========================================
 
     async def check_profit_protection(self):
         """Check profit protection only"""
@@ -249,11 +257,9 @@ class TradeEngine:
             
         pnl_pct = self.position['unrealized_pnl_pct']
         
-        # Check profit protection (high profit)
         if self.risk_manager.should_take_profit_protection(pnl_pct):
             print(f"\n💰 PROFIT PROTECTION: {pnl_pct:.2f}% (threshold: {self.risk_manager.profit_protection_threshold}%)")
             await self.close_position("Profit Protection")
-            return
 
     async def check_profit_lock(self, current_price):
         """Check if profit lock should be activated"""
@@ -262,118 +268,145 @@ class TradeEngine:
             
         pnl_pct = self.position['unrealized_pnl_pct']
         
-        # Dynamic threshold calculation
-        if self.current_atr_pct > 0:
-            dynamic_threshold = self.risk_manager.get_dynamic_profit_lock_threshold(self.current_atr_pct)
-            if pnl_pct > 0 and not self.profit_lock_active:
-                print(f" [Lock: {pnl_pct:.1f}%/{dynamic_threshold:.1f}%]", end='')
-        else:
-            if pnl_pct > 0 and not self.profit_lock_active:
-                print(f" [Lock: {pnl_pct:.1f}%/{self.risk_manager.profit_lock_threshold:.1f}%]", end='')
+        # Display current status
+        self._display_profit_lock_status(pnl_pct)
         
-        # Check profit lock activation
+        # Check activation
         if not self.profit_lock_active and self.risk_manager.should_activate_profit_lock(pnl_pct, self.current_atr_pct):
-            self.profit_lock_active = True
-            
+            await self._activate_profit_lock(pnl_pct, current_price)
+    
+    def _display_profit_lock_status(self, pnl_pct):
+        """Display profit lock status"""
+        if pnl_pct > 0 and not self.profit_lock_active:
             if self.current_atr_pct > 0:
                 dynamic_threshold = self.risk_manager.get_dynamic_profit_lock_threshold(self.current_atr_pct)
-                print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}% (ATR-dynamic: {dynamic_threshold:.1f}%)")
+                print(f" [Lock: {pnl_pct:.1f}%/{dynamic_threshold:.1f}%]", end='')
             else:
-                print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}% (static: {self.risk_manager.profit_lock_threshold:.1f}%)")
+                print(f" [Lock: {pnl_pct:.1f}%/{self.risk_manager.profit_lock_threshold:.1f}%]", end='')
+    
+    async def _activate_profit_lock(self, pnl_pct, current_price):
+        """Activate profit lock with trailing stop"""
+        self.profit_lock_active = True
+        
+        if self.current_atr_pct > 0:
+            dynamic_threshold = self.risk_manager.get_dynamic_profit_lock_threshold(self.current_atr_pct)
+            print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}% (ATR-dynamic: {dynamic_threshold:.1f}%)")
+        else:
+            print(f"\n🔓 PROFIT LOCK ACTIVATED! P&L: {pnl_pct:.2f}% (static: {self.risk_manager.profit_lock_threshold:.1f}%)")
+        
+        await self.notifier.profit_lock_activated(
+            self.symbol, pnl_pct, self.risk_manager.trailing_stop_distance * 100
+        )
+        
+        await self._set_trailing_stop(current_price)
+        self.last_trailing_update = datetime.now()
+    
+    async def _set_trailing_stop(self, current_price):
+        """Set trailing stop"""
+        info = self.get_symbol_info()
+        if info:
+            trailing_distance = self.risk_manager.get_trailing_stop_distance_absolute(current_price)
+            formatted_trailing_distance = self.format_price(info, trailing_distance)
             
-            await self.notifier.profit_lock_activated(
-                self.symbol, pnl_pct, self.risk_manager.trailing_stop_distance * 100
+            resp = self.exchange.set_trading_stop(
+                category="linear",
+                symbol=self.linear,
+                positionIdx=0,
+                takeProfit="",
+                stopLoss="",
+                trailingStop=formatted_trailing_distance,
+                activePrice=self.format_price(info, current_price)
             )
             
-            # Set trailing stop
-            info = self.get_symbol_info()
-            if info:
-                trailing_distance = self.risk_manager.get_trailing_stop_distance_absolute(current_price)
-                formatted_trailing_distance = self.format_price(info, trailing_distance)
-                
-                resp = self.exchange.set_trading_stop(
-                    category="linear",
-                    symbol=self.linear,
-                    positionIdx=0,
-                    takeProfit="",
-                    stopLoss="",
-                    trailingStop=formatted_trailing_distance,
-                    activePrice=self.format_price(info, current_price)
-                )
-                
-                if resp.get('retCode') == 0:
-                    print(f"✅ Trailing stop set: {formatted_trailing_distance} distance")
-                else:
-                    print(f"❌ Trailing stop failed: {resp.get('retMsg')}")
-            
-            self.last_trailing_update = datetime.now()
+            if resp.get('retCode') == 0:
+                print(f"✅ Trailing stop set: {formatted_trailing_distance} distance")
+            else:
+                print(f"❌ Trailing stop failed: {resp.get('retMsg')}")
+
+    # ==========================================
+    # ORDER EXECUTION (Single Responsibility)
+    # ==========================================
 
     async def open_position(self, signal):
         """Open position"""
         try:
+            # Get market data
             balance = self.get_account_balance()
             ticker = self.exchange.get_tickers(category="linear", symbol=self.linear)
             current_price = float(ticker['result']['list'][0]['lastPrice'])
             
+            # Calculate position
             position_size = self.risk_manager.calculate_position_size(balance, current_price)
             info = self.get_symbol_info()
             if not info:
                 return False
             
+            # Execute order
             qty = self.format_qty(info, position_size)
             side = "Buy" if signal['action'] == 'BUY' else "Sell"
             
             print(f"\n📈 Opening {side}: {qty} @ ${current_price:.4f}")
             
-            order = self.exchange.place_order(
-                category="linear",
-                symbol=self.linear,
-                side=side,
-                orderType="Market",
-                qty=qty
-            )
-            
-            if order.get('retCode') != 0:
-                print(f"❌ Order failed: {order.get('retMsg')}")
+            success = await self._execute_market_order(side, qty)
+            if not success:
                 return False
             
-            await asyncio.sleep(2)
-            
             # Set initial stops
-            try:
-                if signal['action'] == 'BUY':
-                    sl = self.risk_manager.get_stop_loss(current_price, 'long')
-                    tp = self.risk_manager.get_take_profit(current_price, 'long')
-                else:
-                    sl = self.risk_manager.get_stop_loss(current_price, 'short')
-                    tp = self.risk_manager.get_take_profit(current_price, 'short')
-                
-                stop_resp = self.exchange.set_trading_stop(
-                    category="linear",
-                    symbol=self.linear,
-                    positionIdx=0,
-                    stopLoss=self.format_price(info, sl),
-                    takeProfit=self.format_price(info, tp),
-                    slTriggerBy="LastPrice",
-                    tpTriggerBy="LastPrice"
-                )
-                
-                if stop_resp.get('retCode') == 0:
-                    print(f"✅ Initial stops set - SL: ${sl:.6f}, TP: ${tp:.6f}")
-                else:
-                    print(f"⚠️ Stop setting failed: {stop_resp.get('retMsg')} (continuing)")
-                    
-            except Exception as e:
-                print(f"⚠️ Stop setting error: {e} (continuing)")
+            await self._set_initial_stops(signal, current_price, info)
             
+            # Notify and update state
             self.profit_lock_active = False
-            
             await self.notifier.trade_opened(self.symbol, current_price, float(qty), side)
             return True
             
         except Exception as e:
             print(f"❌ Position open error: {e}")
             return False
+    
+    async def _execute_market_order(self, side, qty):
+        """Execute market order"""
+        order = self.exchange.place_order(
+            category="linear",
+            symbol=self.linear,
+            side=side,
+            orderType="Market",
+            qty=qty
+        )
+        
+        if order.get('retCode') != 0:
+            print(f"❌ Order failed: {order.get('retMsg')}")
+            return False
+        
+        await asyncio.sleep(2)
+        return True
+    
+    async def _set_initial_stops(self, signal, current_price, info):
+        """Set initial stop loss and take profit"""
+        try:
+            if signal['action'] == 'BUY':
+                sl = self.risk_manager.get_stop_loss(current_price, 'long')
+                tp = self.risk_manager.get_take_profit(current_price, 'long')
+            else:
+                sl = self.risk_manager.get_stop_loss(current_price, 'short')
+                tp = self.risk_manager.get_take_profit(current_price, 'short')
+            
+            stop_resp = self.exchange.set_trading_stop(
+                category="linear",
+                symbol=self.linear,
+                positionIdx=0,
+                stopLoss=self.format_price(info, sl),
+                takeProfit=self.format_price(info, tp),
+                slTriggerBy="LastPrice",
+                tpTriggerBy="LastPrice"
+            )
+            
+            if stop_resp.get('retCode') == 0:
+                print(f"✅ Initial stops set - SL: ${sl:.6f}, TP: ${tp:.6f}")
+            else:
+                print(f"⚠️ Stop setting failed: {stop_resp.get('retMsg')} (continuing)")
+                
+        except Exception as e:
+            print(f"⚠️ Stop setting error: {e} (continuing)")
     
     async def close_position(self, reason="Signal"):
         """Close position"""
@@ -398,126 +431,110 @@ class TradeEngine:
             if order.get('retCode') != 0:
                 return False
             
-            pnl = self.position.get('unrealized_pnl', 0)
-            pnl_pct = self.position.get('unrealized_pnl_pct', 0)
-            
-            if reason == "Profit Protection" and self.risk_manager.should_take_profit_protection(pnl_pct):
-                self.reversal_cooldown_cycles = self.risk_manager.reversal_cooldown_cycles
-            
-            await self.notifier.trade_closed(self.symbol, pnl_pct, pnl, reason)
-            
-            self.position = None
-            self.profit_lock_active = False
+            # Handle post-close actions
+            await self._handle_position_close(reason)
             return True
             
         except Exception as e:
             print(f"❌ Close error: {e}")
             return False
-
-    async def run_cycle(self):
-        """Run trading cycle - SIMPLIFIED (No ranging logic)"""
-        try:
-            df = self.get_market_data()
-            if df is None or df.empty:
-                print("⚠️ No market data available")
-                return
-            
-            self.check_position()
-            signal = self.strategy.generate_signal(df)
-            
-            try:
-                current_price = df['close'].iloc[-1]
-            except (IndexError, KeyError):
-                print("⚠️ Cannot get current price")
-                return
-            
-            # Get ATR from strategy
-            try:
-                if hasattr(self.strategy, 'current_atr_pct'):
-                    self.current_atr_pct = self.strategy.current_atr_pct
-                else:
-                    self.current_atr_pct = 0
-            except:
-                self.current_atr_pct = 0
-            
-            # Get indicators
-            current_rsi = current_mfi = 50.0
-            current_trend = "UNKNOWN"
-            
-            if len(df) >= 26:
-                try:
-                    df_with_indicators = self.strategy.calculate_indicators(df)
-                    if df_with_indicators is not None and not df_with_indicators.empty:
-                        current_rsi = df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators.columns else 50.0
-                        current_mfi = df_with_indicators['mfi'].iloc[-1] if 'mfi' in df_with_indicators.columns else 50.0
-                        current_trend = df_with_indicators['trend'].iloc[-1] if 'trend' in df_with_indicators.columns else "UNKNOWN"
-                except Exception as e:
-                    print(f"⚠️ Indicator calculation error: {e}")
-            
-            # Handle cooldown
-            if self.reversal_cooldown_cycles > 0:
-                self.reversal_cooldown_cycles -= 1
-                if self.reversal_cooldown_cycles == 0:
-                    print(f"\n🔓 Cooldown ended")
-            
-            # SIMPLIFIED: Only check essential exit conditions if we have a position
-            if self.position:
-                await self.check_profit_protection()  # Only profit protection
-                if self.position:  # Check if still exists after profit protection
-                    await self.check_profit_lock(current_price)
-                    await self.check_loss_switch()
-            
-            # Display status (removed ranging info)
-            position_info = 'None'
-            cooldown_info = ''
-            trend_emoji = {"UP": "🟢", "DOWN": "🔴", "SIDEWAYS": "🟡", "UNKNOWN": "⚪"}.get(current_trend, "⚪")
-            
-            if self.reversal_cooldown_cycles > 0:
-                cooldown_info = f' [Cooldown: {self.reversal_cooldown_cycles}]'
-            
-            if self.position:
-                pnl_pct = self.position['unrealized_pnl_pct']
-                lock_status = '🔒' if self.profit_lock_active else ''
-                position_info = f"{self.position['side']} ({pnl_pct:+.2f}%) {lock_status}"
-            
-            # ATR and Lock threshold display
-            if self.current_atr_pct > 0:
-                atr_display = f"ATR:{self.current_atr_pct:.1f}%"
-                dynamic_threshold = self.risk_manager.get_dynamic_profit_lock_threshold(self.current_atr_pct)
-                lock_display = f"Lock@{dynamic_threshold:.1f}%"
-            else:
-                atr_display = "ATR:N/A"
-                lock_display = f"Lock@{self.risk_manager.profit_lock_threshold:.1f}%"
-            
-            print(f"\r[{datetime.now().strftime('%H:%M:%S')}] "
-                f"${current_price:.4f} | RSI:{current_rsi:.1f} | MFI:{current_mfi:.1f} | "
-                f"{trend_emoji}{current_trend} | {atr_display} | {lock_display} | "
-                f"{position_info}{cooldown_info}", 
-                end='', flush=True)
-            
-            # Handle signals
-            if signal:
-                 await self.handle_signal_zora_optimized(signal)
-                
-        except Exception as e:
-            print(f"\n❌ Cycle error: {e}")
-
-    async def handle_signal_zora_optimized(self, signal):
-        """ZORA-optimized signal handling with volume and MACD confirmation"""
-        signal_action = signal['action']
+    
+    async def _handle_position_close(self, reason):
+        """Handle post-position-close actions"""
+        pnl = self.position.get('unrealized_pnl', 0)
+        pnl_pct = self.position.get('unrealized_pnl_pct', 0)
         
-        # Get current market data for validation
-        df = self.get_market_data()
-        if df is None or len(df) < 10:
+        if reason == "Profit Protection" and self.risk_manager.should_take_profit_protection(pnl_pct):
+            self.reversal_cooldown_cycles = self.risk_manager.reversal_cooldown_cycles
+        
+        await self.notifier.trade_closed(self.symbol, pnl_pct, pnl, reason)
+        self._clear_position_state()
+
+    # ==========================================
+    # SIGNAL PROCESSING (Single Responsibility)
+    # ==========================================
+    
+    def extract_indicators(self, df):
+        """Extract current indicators from market data"""
+        current_rsi = current_mfi = 50.0
+        current_trend = "UNKNOWN"
+        
+        if len(df) >= 26:
+            try:
+                df_with_indicators = self.strategy.calculate_indicators(df)
+                if df_with_indicators is not None and not df_with_indicators.empty:
+                    current_rsi = df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators.columns else 50.0
+                    current_mfi = df_with_indicators['mfi'].iloc[-1] if 'mfi' in df_with_indicators.columns else 50.0
+                    current_trend = df_with_indicators['trend'].iloc[-1] if 'trend' in df_with_indicators.columns else "UNKNOWN"
+            except Exception as e:
+                print(f"⚠️ Indicator calculation error: {e}")
+        
+        return current_rsi, current_mfi, current_trend
+    
+    def update_atr_data(self):
+        """Update ATR data from strategy"""
+        try:
+            if hasattr(self.strategy, 'current_atr_pct'):
+                self.current_atr_pct = self.strategy.current_atr_pct
+            else:
+                self.current_atr_pct = 0
+        except:
+            self.current_atr_pct = 0
+    
+    def handle_cooldown(self):
+        """Handle reversal cooldown logic"""
+        if self.reversal_cooldown_cycles > 0:
+            self.reversal_cooldown_cycles -= 1
+            if self.reversal_cooldown_cycles == 0:
+                print(f"\n🔓 Cooldown ended")
+
+    async def handle_signal(self, signal):
+        """Handle trading signal"""
+        if not signal:
+            return
+            
+        # Validate signal
+        if not await self._validate_signal(signal):
             return
         
-        # Calculate volume ratio (need last 10 periods for average)
+        # Process signal based on current position
+        if self.position:
+            await self._handle_signal_with_position(signal)
+        else:
+            await self._handle_signal_no_position(signal)
+    
+    async def _validate_signal(self, signal):
+        """Validate signal with ZORA-specific criteria"""
+        df = self.get_market_data()
+        if df is None or len(df) < 10:
+            return False
+        
+        # Get validation data
+        volume_ratio = self._calculate_volume_ratio(df)
+        macd, macd_signal = self._get_macd_data(df)
+        current_rsi, current_mfi, current_trend = self.extract_indicators(df)
+        
+        # Validate
+        if hasattr(self.risk_manager, 'is_valid_zora_signal'):
+            is_valid, reason = self.risk_manager.is_valid_zora_signal(
+                current_rsi, current_mfi, current_trend, volume_ratio, macd, macd_signal
+            )
+            
+            if not is_valid:
+                print(f"\n⏸️ ZORA Signal rejected: {reason}")
+                return False
+        
+        return True
+    
+    def _calculate_volume_ratio(self, df):
+        """Calculate volume ratio"""
         recent_volumes = df['volume'].tail(10).tolist()
         current_volume = df['volume'].iloc[-1]
         avg_volume = sum(recent_volumes) / len(recent_volumes)
-        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
-        
-        # Get MACD data (if available from strategy)
+        return current_volume / avg_volume if avg_volume > 0 else 1.0
+    
+    def _get_macd_data(self, df):
+        """Get MACD data"""
         macd = macd_signal = 0
         try:
             df_with_indicators = self.strategy.calculate_indicators(df)
@@ -526,62 +543,140 @@ class TradeEngine:
                 macd_signal = df_with_indicators['macd_signal'].iloc[-1] if 'macd_signal' in df_with_indicators.columns else 0
         except:
             pass
+        return macd, macd_signal
+    
+    async def _handle_signal_with_position(self, signal):
+        """Handle signal when we have a position"""
+        current_side = self.position['side']
+        pnl_pct = self.position['unrealized_pnl_pct']
+        signal_action = signal['action']
         
-        # Get current RSI, MFI, trend
-        current_rsi = current_mfi = 50.0
-        current_trend = "UNKNOWN"
-        try:
-            df_with_indicators = self.strategy.calculate_indicators(df)
-            if df_with_indicators is not None:
-                current_rsi = df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators.columns else 50.0
-                current_mfi = df_with_indicators['mfi'].iloc[-1] if 'mfi' in df_with_indicators.columns else 50.0
-                current_trend = df_with_indicators['trend'].iloc[-1] if 'trend' in df_with_indicators.columns else "UNKNOWN"
-        except:
-            pass
+        # Check if signal is opposite to current position
+        should_reverse = (
+            (current_side == 'Buy' and signal_action == 'SELL') or 
+            (current_side == 'Sell' and signal_action == 'BUY')
+        )
         
-        # Validate signal using ZORA-specific criteria
-        if hasattr(self.risk_manager, 'is_valid_zora_signal'):
-            is_valid, reason = self.risk_manager.is_valid_zora_signal(
-                current_rsi, current_mfi, current_trend, volume_ratio, macd, macd_signal
-            )
-            
-            if not is_valid:
-                print(f"\n⏸️ ZORA Signal rejected: {reason}")
-                return
+        if should_reverse:
+            await self._handle_position_reversal(signal, pnl_pct)
+    
+    async def _handle_position_reversal(self, signal, pnl_pct):
+        """Handle position reversal logic"""
+        if pnl_pct >= 0.05:  # Any profit > 0.05% = take it
+            print(f"\n💰 ZORA: Taking {pnl_pct:.2f}% profit on opposite signal")
+            await self.close_position("ZORA Profit Signal")
+            await asyncio.sleep(2)
+            await self.open_position(signal)
+        elif pnl_pct <= -1.5:  # Loss > 1.5% = reverse to limit damage
+            print(f"\n🔄 ZORA: Reversing losing position: {pnl_pct:.2f}%")
+            await self.close_position("ZORA Loss Reversal")
+            await asyncio.sleep(2)
+            await self.open_position(signal)
+        else:
+            print(f"\n⏸️ ZORA Signal ignored - P&L: {pnl_pct:.2f}% (between -1.5% and +0.05%)")
+    
+    async def _handle_signal_no_position(self, signal):
+        """Handle signal when we have no position"""
+        if self.reversal_cooldown_cycles > 0:
+            print(f"\n⏸️ Cooldown active ({self.reversal_cooldown_cycles} cycles)")
+        else:
+            atr_info = f" (ATR: {self.current_atr_pct:.1f}%)" if self.current_atr_pct > 0 else ""
+            print(f"\n🎯 ZORA Signal: {signal['action']} @ ${signal['price']:.4f}{atr_info}")
+            await self.open_position(signal)
+
+    # ==========================================
+    # STATUS DISPLAY (Single Responsibility)
+    # ==========================================
+    
+    def create_status_display(self, current_price, current_rsi, current_mfi, current_trend):
+        """Create status display string"""
+        # Position info
+        position_info = 'None'
+        cooldown_info = ''
+        
+        if self.reversal_cooldown_cycles > 0:
+            cooldown_info = f' [Cooldown: {self.reversal_cooldown_cycles}]'
         
         if self.position:
-            current_side = self.position['side']
             pnl_pct = self.position['unrealized_pnl_pct']
-            
-            # Check if signal is opposite to current position
-            should_reverse = (
-                (current_side == 'Buy' and signal_action == 'SELL') or 
-                (current_side == 'Sell' and signal_action == 'BUY')
-            )
-            
-            if should_reverse:
-                # ZORA-optimized reversal logic
-                if pnl_pct >= 0.05:  # Any profit > 0.05% = take it (more conservative)
-                    print(f"\n💰 ZORA: Taking {pnl_pct:.2f}% profit on opposite signal")
-                    await self.close_position("ZORA Profit Signal")
-                    await asyncio.sleep(2)
-                    await self.open_position(signal)
-                elif pnl_pct <= -1.5:  # Loss > 1.5% = reverse to limit damage (tighter)
-                    print(f"\n🔄 ZORA: Reversing losing position: {pnl_pct:.2f}%")
-                    await self.close_position("ZORA Loss Reversal")
-                    await asyncio.sleep(2)
-                    await self.open_position(signal)
-                else:
-                    print(f"\n⏸️ ZORA Signal ignored - P&L: {pnl_pct:.2f}% (between -1.5% and +0.05%)")
+            lock_status = '🔒' if self.profit_lock_active else ''
+            position_info = f"{self.position['side']} ({pnl_pct:+.2f}%) {lock_status}"
         else:
-            # No position - open new one if not in cooldown
-            if self.reversal_cooldown_cycles > 0:
-                print(f"\n⏸️ Cooldown active ({self.reversal_cooldown_cycles} cycles)")
+            # Show what we're waiting for when no position
+            oversold = self.strategy.params['oversold_level']
+            overbought = self.strategy.params['overbought_level']
+            require_trend = self.strategy.params.get('require_trend', False)
+            
+            if require_trend and current_trend == 'DOWN' and current_rsi <= oversold + 5:
+                position_info = 'Waiting: UP trend'
+            elif current_rsi > oversold and current_mfi > oversold:
+                position_info = f'Waiting: RSI<{oversold}'
             else:
-                atr_info = f" (ATR: {self.current_atr_pct:.1f}%)" if self.current_atr_pct > 0 else ""
-                vol_info = f" (Vol: {volume_ratio:.1f}x)" if volume_ratio > 1.0 else ""
-                print(f"\n🎯 ZORA Signal: {signal_action} @ ${signal['price']:.4f}{atr_info}{vol_info}")
-                await self.open_position(signal)
+                position_info = 'None'
+        
+        # Trend emoji
+        trend_emoji = {"UP": "🟢", "DOWN": "🔴", "SIDEWAYS": "🟡", "UNKNOWN": "⚪"}.get(current_trend, "⚪")
+        
+        # ATR and Lock threshold display
+        if self.current_atr_pct > 0:
+            atr_display = f"ATR:{self.current_atr_pct:.1f}%"
+            dynamic_threshold = self.risk_manager.get_dynamic_profit_lock_threshold(self.current_atr_pct)
+            lock_display = f"Lock@{dynamic_threshold:.1f}%"
+        else:
+            atr_display = "ATR:N/A"
+            lock_display = f"Lock@{self.risk_manager.profit_lock_threshold:.1f}%"
+        
+        return (f"[{datetime.now().strftime('%H:%M:%S')}] "
+                f"${current_price:.4f} | RSI:{current_rsi:.1f} | MFI:{current_mfi:.1f} | "
+                f"{trend_emoji}{current_trend} | {atr_display} | {lock_display} | "
+                f"{position_info}{cooldown_info}")
+
+    # ==========================================
+    # MAIN TRADING CYCLE (Single Responsibility)
+    # ==========================================
+
+    async def run_cycle(self):
+        """Main trading cycle - CLEAN and focused"""
+        try:
+            # 1. Get market data
+            df = self.get_market_data()
+            if df is None or df.empty:
+                print("⚠️ No market data available")
+                return
+            
+            # 2. Update position and extract data
+            self.check_position()
+            signal = self.strategy.generate_signal(df)
+            current_price = self.get_current_price(df)
+            if current_price is None:
+                return
+            
+            # 3. Update indicators and ATR
+            self.update_atr_data()
+            current_rsi, current_mfi, current_trend = self.extract_indicators(df)
+            
+            # 4. Handle cooldown
+            self.handle_cooldown()
+            
+            # 5. Risk management checks (if we have position)
+            if self.position:
+                await self.check_profit_protection()
+                if self.position:  # Check if still exists after profit protection
+                    await self.check_profit_lock(current_price)
+            
+            # 6. Display status
+            status = self.create_status_display(current_price, current_rsi, current_mfi, current_trend)
+            print(f"\r{status}", end='', flush=True)
+            
+            # 7. Handle signals
+            await self.handle_signal(signal)
+                
+        except Exception as e:
+            print(f"\n❌ Cycle error: {e}")
+
+    # ==========================================
+    # MAIN EXECUTION (Single Responsibility)
+    # ==========================================
     
     async def run(self):
         """Main trading loop"""

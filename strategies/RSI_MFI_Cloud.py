@@ -8,12 +8,11 @@ class RSIMFICloudStrategy:
         # Trading Symbol
         self.symbol = "ZORA/USDT"
         
-        # ATR Risk Management (optimized for ZORA volatility)
+        # ATR Configuration
         self.atr_period = 14
-        self.atr_multiplier = 1.5          # Reduced from 2.0 for tighter stops
         
         # Signal Management
-        self.signal_cooldown_period = 5    # Bars to wait between signals
+        self.signal_cooldown_period = 5
         
         # Load strategy parameters
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -21,14 +20,15 @@ class RSIMFICloudStrategy:
         with open(params_file, 'r') as f:
             self.params = json.load(f)
         
-        # Runtime variables
+        # Runtime variables (ONLY for strategy logic)
         self.last_signal = None
         self.signal_cooldown = 0
-        self.trailing_stop = None
-        self.position_type = None
-        self.entry_price = None
         self.current_atr_pct = 0  # For risk management integration
         
+    # ==========================================
+    # INDICATOR CALCULATIONS (Single Responsibility)
+    # ==========================================
+    
     def calculate_rsi(self, prices, period=7):
         """Calculate RSI"""
         try:
@@ -135,48 +135,10 @@ class RSIMFICloudStrategy:
             print(f"ATR error: {e}")
             return pd.Series([0] * len(df), index=df.index)
     
-    def set_position(self, position_type, entry_price, current_atr):
-        """Initialize position with ATR-based stop"""
-        self.position_type = position_type
-        self.entry_price = entry_price
-        
-        if position_type == 'LONG':
-            self.trailing_stop = entry_price - (current_atr * self.atr_multiplier)
-        elif position_type == 'SHORT':
-            self.trailing_stop = entry_price + (current_atr * self.atr_multiplier)
+    # ==========================================
+    # INDICATOR AGGREGATION (Single Responsibility)
+    # ==========================================
     
-    def update_trailing_stop(self, current_price, current_atr):
-        """Update trailing stop based on current price and ATR"""
-        if self.position_type is None or self.trailing_stop is None:
-            return self.trailing_stop
-            
-        if self.position_type == 'LONG':
-            new_stop = current_price - (current_atr * self.atr_multiplier)
-            self.trailing_stop = max(self.trailing_stop, new_stop)
-        elif self.position_type == 'SHORT':
-            new_stop = current_price + (current_atr * self.atr_multiplier)
-            self.trailing_stop = min(self.trailing_stop, new_stop)
-            
-        return self.trailing_stop
-    
-    def check_stop_hit(self, current_price):
-        """Check if trailing stop is hit"""
-        if self.trailing_stop is None or self.position_type is None:
-            return False
-            
-        if self.position_type == 'LONG':
-            return current_price <= self.trailing_stop
-        elif self.position_type == 'SHORT':
-            return current_price >= self.trailing_stop
-            
-        return False
-    
-    def reset_position(self):
-        """Clear position data"""
-        self.trailing_stop = None
-        self.position_type = None
-        self.entry_price = None
-        
     def calculate_indicators(self, df):
         """Calculate all indicators"""
         df = df.copy()
@@ -196,55 +158,12 @@ class RSIMFICloudStrategy:
         
         return df
     
-    def generate_signal(self, df):
-        """Generate trading signals with ATR-based risk management"""
-        min_bars = max(self.params['rsi_length'], self.params['mfi_length'], 26, self.atr_period) + 5
-        if len(df) < min_bars:
-            return None
-        
-        # Calculate indicators
-        df = self.calculate_indicators(df)
-        
-        # Get current values
-        current_rsi = df['rsi'].iloc[-1]
-        current_mfi = df['mfi'].iloc[-1]
-        current_price = df['close'].iloc[-1]
-        current_trend = df['trend'].iloc[-1]
-        current_atr = df['atr'].iloc[-1]
-        
-        # Update ATR percentage for risk management integration
-        if current_price > 0 and current_atr > 0:
-            self.current_atr_pct = (current_atr / current_price) * 100
-        else:
-            self.current_atr_pct = 0
-        
-        # Validate
-        if pd.isna(current_rsi) or pd.isna(current_mfi) or pd.isna(current_price) or pd.isna(current_atr):
-            return None
-        
-        # Check if current position should be closed (trailing stop)
-        if self.position_type:
-            self.update_trailing_stop(current_price, current_atr)
-            
-            if self.check_stop_hit(current_price):
-                self.reset_position()
-                return {
-                    'action': 'CLOSE',
-                    'reason': 'TRAILING_STOP_HIT',
-                    'price': current_price,
-                    'stop_price': self.trailing_stop,
-                    'timestamp': df.index[-1]
-                }
-        
-        # Signal cooldown
-        if self.signal_cooldown > 0:
-            self.signal_cooldown -= 1
-            return None
-        
-        # Signal conditions
-        oversold = self.params['oversold_level']
-        overbought = self.params['overbought_level']
-        
+    # ==========================================
+    # SIGNAL VALIDATION (Single Responsibility)
+    # ==========================================
+    
+    def validate_signal_conditions(self, current_rsi, current_mfi, current_trend, oversold, overbought):
+        """Validate signal conditions"""
         buy_conditions = [
             current_rsi < oversold,
             current_mfi < oversold,
@@ -259,39 +178,105 @@ class RSIMFICloudStrategy:
             self.last_signal != 'SELL'
         ]
         
+        return buy_conditions, sell_conditions
+    
+    def check_signal_cooldown(self):
+        """Check and update signal cooldown"""
+        if self.signal_cooldown > 0:
+            self.signal_cooldown -= 1
+            return False
+        return True
+    
+    def update_signal_state(self, signal_type):
+        """Update signal state after signal generation"""
+        self.last_signal = signal_type
+        self.signal_cooldown = self.signal_cooldown_period
+    
+    # ==========================================
+    # SIGNAL GENERATION (Single Responsibility)
+    # ==========================================
+    
+    def generate_signal(self, df):
+        """Generate trading signals - PURE STRATEGY LOGIC ONLY"""
+        min_bars = max(self.params['rsi_length'], self.params['mfi_length'], 26, self.atr_period) + 5
+        if len(df) < min_bars:
+            return None
+        
+        # Calculate indicators
+        df = self.calculate_indicators(df)
+        
+        # Extract current values
+        current_values = self.extract_current_values(df)
+        if not current_values:
+            return None
+        
+        current_rsi, current_mfi, current_price, current_trend, current_atr = current_values
+        
+        # Update ATR percentage for risk management integration
+        self.update_atr_percentage(current_price, current_atr)
+        
+        # Check cooldown
+        if not self.check_signal_cooldown():
+            return None
+        
         # Generate signals
+        return self.evaluate_signal_conditions(current_rsi, current_mfi, current_price, current_trend, df.index[-1])
+    
+    def extract_current_values(self, df):
+        """Extract current indicator values"""
+        try:
+            current_rsi = df['rsi'].iloc[-1]
+            current_mfi = df['mfi'].iloc[-1]
+            current_price = df['close'].iloc[-1]
+            current_trend = df['trend'].iloc[-1]
+            current_atr = df['atr'].iloc[-1]
+            
+            # Validate
+            if pd.isna(current_rsi) or pd.isna(current_mfi) or pd.isna(current_price) or pd.isna(current_atr):
+                return None
+            
+            return current_rsi, current_mfi, current_price, current_trend, current_atr
+            
+        except (IndexError, KeyError):
+            return None
+    
+    def update_atr_percentage(self, current_price, current_atr):
+        """Update ATR percentage for risk management integration"""
+        if current_price > 0 and current_atr > 0:
+            self.current_atr_pct = (current_atr / current_price) * 100
+        else:
+            self.current_atr_pct = 0
+    
+    def evaluate_signal_conditions(self, current_rsi, current_mfi, current_price, current_trend, timestamp):
+        """Evaluate signal conditions and generate signal"""
+        oversold = self.params['oversold_level']
+        overbought = self.params['overbought_level']
+        
+        buy_conditions, sell_conditions = self.validate_signal_conditions(
+            current_rsi, current_mfi, current_trend, oversold, overbought
+        )
+        
+        # Generate BUY signal
         if all(buy_conditions):
-            self.last_signal = 'BUY'
-            self.signal_cooldown = self.signal_cooldown_period
-            self.set_position('LONG', current_price, current_atr)
+            self.update_signal_state('BUY')
+            return self.create_signal_data('BUY', current_price, current_rsi, current_mfi, current_trend, timestamp)
             
-            return {
-                'action': 'BUY',
-                'price': current_price,
-                'rsi': round(current_rsi, 2),
-                'mfi': round(current_mfi, 2),
-                'trend': current_trend,
-                'timestamp': df.index[-1],
-                'confidence': 'TREND_FILTERED',
-                'trailing_stop': round(self.trailing_stop, 4),
-                'atr': round(current_atr, 4)
-            }
-            
+        # Generate SELL signal
         elif all(sell_conditions):
-            self.last_signal = 'SELL'
-            self.signal_cooldown = self.signal_cooldown_period
-            self.set_position('SHORT', current_price, current_atr)
-            
-            return {
-                'action': 'SELL',
-                'price': current_price,
-                'rsi': round(current_rsi, 2),
-                'mfi': round(current_mfi, 2),
-                'trend': current_trend,
-                'timestamp': df.index[-1],
-                'confidence': 'TREND_FILTERED',
-                'trailing_stop': round(self.trailing_stop, 4),
-                'atr': round(current_atr, 4)
-            }
+            self.update_signal_state('SELL')
+            return self.create_signal_data('SELL', current_price, current_rsi, current_mfi, current_trend, timestamp)
         
         return None
+    
+    def create_signal_data(self, action, price, rsi, mfi, trend, timestamp):
+        """Create signal data structure"""
+        return {
+            'action': action,
+            'price': price,
+            'rsi': round(rsi, 2),
+            'mfi': round(mfi, 2),
+            'trend': trend,
+            'timestamp': timestamp,
+            'confidence': 'TREND_FILTERED' if self.params['require_trend'] else 'STANDARD',
+            'atr_pct': round(self.current_atr_pct, 2)
+        }
