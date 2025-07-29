@@ -24,17 +24,7 @@ class TelegramNotifier:
             print(f"⚠️ Telegram initialization failed: {e}")
             self.enabled = False
 
-    async def clear_messages(self):
-        """Clear chat by sending separator message"""
-        if not self.enabled or not self.bot:
-            print("🧹 Chat cleared")
-            return
-        
-        try:
-            separator_msg = "🧹" * 20 + "\n🤖 NEW SESSION\n" + "🧹" * 20
-            await self.bot.send_message(chat_id=self.chat_id, text=separator_msg)
-        except Exception as e:
-            print(f"❌ Clear messages error: {e}")
+
 
     async def send_message(self, message):
         """Send message to Telegram or print to console"""
@@ -137,7 +127,7 @@ class TelegramNotifier:
 
     async def bot_started(self, symbol, balance):
         """Notify when bot starts"""
-        await self.clear_messages()
+       
         
         msg = (
             f"🤖 BOT STARTED\n"

@@ -412,7 +412,7 @@ class TradeEngine:
             return False
     
     async def _handle_position_close(self, reason):
-        """Handle post-position-close actions"""
+        """Handle post-position-close actions - UNIFIED cooldown"""
         pnl = self.position.get('unrealized_pnl', 0)
         pnl_pct = self.position.get('unrealized_pnl_pct', 0)
         
@@ -529,19 +529,21 @@ class TradeEngine:
             await self._handle_position_reversal(signal, pnl_pct)
     
     async def _handle_position_reversal(self, signal, pnl_pct):
-        """Handle position reversal logic"""
-        if pnl_pct >= 0.05:  # Any profit > 0.05% = take it
-            print(f"\n💰 ZORA: Taking {pnl_pct:.2f}% profit on opposite signal")
+        """Handle position reversal logic - UNIFIED with RiskManager"""
+        if self.risk_manager.should_reverse_for_profit(pnl_pct):
+            print(f"\n💰 ZORA: Taking {pnl_pct:.2f}% profit on opposite signal (threshold: {self.risk_manager.profit_reversal_threshold:.2f}%)")
             await self.close_position("ZORA Profit Signal")
             await asyncio.sleep(2)
             await self.open_position(signal)
-        elif pnl_pct <= -1.5:  # Loss > 1.5% = reverse to limit damage
-            print(f"\n🔄 ZORA: Reversing losing position: {pnl_pct:.2f}%")
+        elif self.risk_manager.should_reverse_for_loss(pnl_pct):
+            print(f"\n🔄 ZORA: Reversing losing position: {pnl_pct:.2f}% (threshold: {self.risk_manager.loss_reversal_threshold:.2f}%)")
             await self.close_position("ZORA Loss Reversal")
             await asyncio.sleep(2)
             await self.open_position(signal)
         else:
-            print(f"\n⏸️ ZORA Signal ignored - P&L: {pnl_pct:.2f}% (between -1.5% and +0.05%)")
+            profit_thresh = self.risk_manager.profit_reversal_threshold
+            loss_thresh = self.risk_manager.loss_reversal_threshold
+            print(f"\n⏸️ ZORA Signal ignored - P&L: {pnl_pct:.2f}% (between {loss_thresh:.2f}% and +{profit_thresh:.2f}%)")
     
     async def _handle_signal_no_position(self, signal):
         """Handle signal when we have no position"""

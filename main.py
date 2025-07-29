@@ -16,12 +16,12 @@ def display_essential_info(engine, balance, current_price):
     """Display essential risk management and strategy info"""
     print(f"💰 Balance: ${balance:,.2f} | Symbol: {engine.symbol} | Leverage: {engine.risk_manager.leverage}x")
     
-    print(f"\n🚨 RISK MANAGEMENT:")
-    print(f"🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.1f}% account → Trailing stop")
+    print(f"\n🚨 UNIFIED RISK MANAGEMENT:")
+    print(f"🔓 Profit Lock: {engine.risk_manager.profit_lock_threshold:.2f}% account → Trailing stop")
     print(f"💰 Profit Protection: {engine.risk_manager.profit_protection_threshold:.1f}% account → Close & cooldown")
-    print(f"🔄 Position Reversal: {engine.risk_manager.position_reversal_threshold:.1f}% account → Reverse on signal")
+    print(f"🔄 Profit Reversal: +{engine.risk_manager.profit_reversal_threshold:.2f}% | Loss Reversal: {engine.risk_manager.loss_reversal_threshold:.1f}%")
     
-    print(f"\n🎮 STRATEGY (Optimized for Higher Win Rate):")
+    print(f"\n🎮 STRATEGY (All from JSON Config):")
     print(f"📈 RSI/MFI: {engine.strategy.params['oversold_level']}/{engine.strategy.params['overbought_level']} | Length: {engine.strategy.params['rsi_length']}")
     print(f"🎯 Trend Filter: {'ON' if engine.strategy.params.get('require_trend', False) else 'OFF'} | Position Size: {engine.risk_manager.max_position_size*100:.1f}%")
 
