@@ -1,8 +1,8 @@
 {
   "rsi_length": 7,
   "mfi_length": 7,
-  "oversold_level": 25,
-  "overbought_level": 75,
+  "oversold_level": 35,
+  "overbought_level": 55,
   "atr_multiplier": 1.0,
   "signal_cooldown": 2,
   "require_trend": true
