@@ -39,7 +39,8 @@ class TelegramNotifier:
         value = size * price
         
         msg = (f"🔔 {direction} {symbol}\n"
-               f"💵 ${value:.2f} @ ${price:.4f}\n"
+               f"💵 ${value:.0f} @ ${price:.2f}\n"
+               f"💸 Risk: $100 fixed\n"
                f"⏰ {self.position_start_time:%H:%M:%S}")
         await self.send_message(msg)
 
@@ -56,17 +57,17 @@ class TelegramNotifier:
                 duration = f"{hours}h {mins}m"
             self.position_start_time = None
 
-        status = "✅ PROFIT" if pnl_pct > 0 else "❌ LOSS"
+        status = "✅ WIN" if pnl_usd > 0 else "❌ LOSS"
         
         msg = (f"{status} {symbol}\n"
-               f"📈 {pnl_pct:+.2f}% (${pnl_usd:+.2f})\n"
+               f"💰 ${pnl_usd:+.2f}\n"
                f"🎯 {reason}\n"
                f"⏱️ {duration} | ⏰ {close_time:%H:%M:%S}")
         await self.send_message(msg)
 
     async def profit_lock_activated(self, symbol, pnl_pct, trailing_pct):
         msg = (f"🔒 PROFIT LOCK!\n"
-               f"📊 {symbol} +{pnl_pct:.2f}%\n"
+               f"📊 {symbol}\n"
                f"🎯 Trailing: {trailing_pct:.1f}%\n"
                f"⏰ {datetime.now():%H:%M:%S}")
         await self.send_message(msg)
@@ -78,7 +79,8 @@ class TelegramNotifier:
     async def bot_started(self, symbol, balance):
         msg = (f"🤖 BOT STARTED\n"
                f"📊 {symbol}\n"
-               f"💰 ${balance:.2f}\n"
+               f"💰 ${balance:.0f}\n"
+               f"💸 Risk: $100/trade\n"
                f"⏰ {datetime.now():%H:%M:%S}")
         await self.send_message(msg)
 

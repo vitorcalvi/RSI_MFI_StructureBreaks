@@ -36,6 +36,7 @@ class TradeEngine:
         self.profit_lock_active = False
         self.entry_price = 0
         self.position_side = None
+        self.position_start_time = None
     
     def connect(self):
         try:
@@ -97,20 +98,24 @@ class TradeEngine:
         try:
             pos_resp = self.exchange.get_positions(category="linear", symbol=self.linear)
             if pos_resp.get('retCode') != 0:
-                self.position = None
+                self._clear_position()
                 return None
                 
             positions = pos_resp.get('result', {}).get('list', [])
             if not positions:
-                self.position = None
+                self._clear_position()
                 return None
             
             position = positions[0]
             position_size = float(position.get('size', 0))
             
             if position_size <= 0:
-                self.position = None
+                self._clear_position()
                 return None
+            
+            # Check if this is a new position
+            if not self.position:
+                self.position_start_time = datetime.now()
             
             # We have a position
             self.position = {
@@ -127,8 +132,16 @@ class TradeEngine:
             
         except Exception as e:
             print(f"❌ Position check error: {e}")
-            self.position = None
+            self._clear_position()
             return None
+    
+    def _clear_position(self):
+        """Clear position state"""
+        self.position = None
+        self.profit_lock_active = False
+        self.entry_price = 0
+        self.position_side = None
+        self.position_start_time = None
 
     def get_symbol_info(self):
         try:
@@ -174,7 +187,7 @@ class TradeEngine:
                 self.entry_price, current_price, self.position_side):
                 
                 self.profit_lock_active = True
-                print(f"\n🔒 PROFIT LOCK ACTIVATED")
+                print(f"\n🔒 PROFIT LOCK ACTIVATED - Trailing stop enabled")
                 
                 # Set trailing stop
                 await self._set_trailing_stop(current_price)
@@ -203,9 +216,7 @@ class TradeEngine:
                 trailingStop=formatted_trailing
             )
             
-            if resp.get('retCode') == 0:
-                print(f"✅ Trailing stop: ${formatted_trailing}")
-            else:
+            if resp.get('retCode') != 0:
                 print(f"⚠️ Trailing stop failed: {resp.get('retMsg')}")
                 
         except Exception as e:
@@ -237,8 +248,19 @@ class TradeEngine:
             qty = self.format_qty(info, position_size)
             side = "Buy" if signal['action'] == 'BUY' else "Sell"
             
-            print(f"\n📈 Opening {side}: {qty} @ ${current_price:.4f}")
-            print(f"💰 Risk: ${self.risk_manager.fixed_risk_usd:.0f}")
+            # Calculate risk values for display
+            side_type = 'long' if signal['action'] == 'BUY' else 'short'
+            sl_price = self.risk_manager.get_stop_loss_price(current_price, side_type)
+            tp_price = self.risk_manager.get_take_profit_price(current_price, side_type)
+            
+            # Calculate P&L amounts
+            risk_amount = self.risk_manager.fixed_risk_usd
+            reward_amount = risk_amount * (self.risk_manager.take_profit_pct / self.risk_manager.stop_loss_pct)
+            rr_ratio = self.risk_manager.take_profit_pct / self.risk_manager.stop_loss_pct
+            
+            # Display new format
+            print(f"\n📈 {side.upper()} {qty} @ ${current_price:.2f}")
+            print(f"💰 Risk: ${risk_amount:.0f} | SL: ${sl_price:.2f} (-${risk_amount:.0f}) | TP: ${tp_price:.2f} (+${reward_amount:.0f}) | R:R 1:{rr_ratio:.1f}")
             
             # Place order
             order = self.exchange.place_order(
@@ -259,6 +281,7 @@ class TradeEngine:
             self.profit_lock_active = False
             self.entry_price = current_price
             self.position_side = side.lower()
+            self.position_start_time = datetime.now()
             
             await self.notifier.trade_opened(self.symbol, current_price, float(qty), side)
             return True
@@ -286,9 +309,7 @@ class TradeEngine:
                 tpTriggerBy="LastPrice"
             )
             
-            if stop_resp.get('retCode') == 0:
-                print(f"✅ SL: ${sl_price:.4f} | TP: ${tp_price:.4f}")
-            else:
+            if stop_resp.get('retCode') != 0:
                 print(f"⚠️ SL/TP failed: {stop_resp.get('retMsg')}")
             
         except Exception as e:
@@ -321,10 +342,8 @@ class TradeEngine:
             pnl = self.position.get('unrealized_pnl', 0)
             await self.notifier.trade_closed(self.symbol, 0, pnl, reason)
             
-            self.position = None
-            self.profit_lock_active = False
-            self.entry_price = 0
-            self.position_side = None
+            # Clear all position state
+            self._clear_position()
             
             return True
             
@@ -346,10 +365,11 @@ class TradeEngine:
             )
             
             if is_opposite:
+                print(f"\n📉 Closing on opposite {signal['action']} signal")
                 await self.close_position("Opposite Signal")
         else:
-            # Open new position
-            print(f"\n🎯 Signal: {signal['action']} @ ${signal['price']:.4f}")
+            # Show signal in new format before opening
+            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] {self.symbol} | RSI: {signal['rsi']:.1f} | MFI: {signal['mfi']:.1f} | 🎯 {signal['action']} @ ${signal['price']:.2f}")
             await self.open_position(signal)
 
     async def run_cycle(self):
@@ -381,22 +401,36 @@ class TradeEngine:
             print(f"\n❌ Cycle error: {e}")
     
     def _display_status(self, df, current_price):
-        """Simple status display"""
+        """New consolidated status display focused on risk management"""
         # Get indicators
         df_with_indicators = self.strategy.calculate_indicators(df)
         current_rsi = df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators.columns else 50.0
         current_mfi = df_with_indicators['mfi'].iloc[-1] if 'mfi' in df_with_indicators.columns else 50.0
         
-        # Position info
-        position_info = 'None'
-        if self.position:
-            pnl = self.position['unrealized_pnl']
-            lock_status = '🔒' if self.profit_lock_active else ''
-            position_info = f"{self.position['side']} (${pnl:+.2f}) {lock_status}"
+        timestamp = datetime.now().strftime('%H:%M:%S')
         
-        status = (f"[{datetime.now().strftime('%H:%M:%S')}] "
-                  f"${current_price:.4f} | RSI:{current_rsi:.1f} | MFI:{current_mfi:.1f} | "
-                  f"Pos:{position_info}")
+        if self.position:
+            # Calculate position duration
+            if self.position_start_time:
+                duration = datetime.now() - self.position_start_time
+                hours, remainder = divmod(int(duration.total_seconds()), 3600)
+                minutes, seconds = divmod(remainder, 60)
+                duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                duration_str = "00:00:00"
+            
+            pnl = self.position['unrealized_pnl']
+            side = self.position['side'].upper()
+            size = self.position['size']
+            
+            lock_status = '🔒' if self.profit_lock_active else ''
+            
+            # Show position status in new format
+            status = (f"⏱️ {duration_str} | ${current_price:.2f} | PnL: ${pnl:+.2f} {lock_status}")
+            
+        else:
+            # Show market status when no position
+            status = (f"[{timestamp}] {self.symbol} | RSI: {current_rsi:.1f} | MFI: {current_mfi:.1f}")
         
         print(f"\r{status}", end='', flush=True)
     
