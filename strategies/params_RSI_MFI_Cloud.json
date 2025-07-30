@@ -1,11 +1,6 @@
 {
-  "symbol": "ETH/USDT",
   "rsi_length": 5,
   "mfi_length": 5,
-  "atr_period": 7,
   "oversold_level": 40,
-  "overbought_level": 50,
-  "atr_multiplier": 1.0,
-  "signal_cooldown": 1,
-  "require_trend": false
+  "overbought_level": 50
 }

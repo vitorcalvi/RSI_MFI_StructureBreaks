@@ -14,11 +14,11 @@ load_dotenv(override=True)
 class TradeEngine:
     def __init__(self):
         self.risk_manager = RiskManager()
-        self.strategy = RSIMFICloudStrategy()
+        self.strategy = RSIMFICloudStrategy(self.risk_manager)  # Pass risk manager
         self.notifier = TelegramNotifier()
         
-        self.symbol = self.strategy.symbol
-        self.linear = self.symbol.replace('/', '')
+        self.symbol = self.risk_manager.symbol  # Get from risk manager
+        self.linear = self.risk_manager.linear
         self.demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
         
         # API credentials
@@ -34,6 +34,8 @@ class TradeEngine:
         self.running = False
         self.position = None
         self.profit_lock_active = False
+        self.entry_price = 0
+        self.position_side = None
     
     def connect(self):
         try:
@@ -47,27 +49,11 @@ class TradeEngine:
             if server_time.get('retCode') == 0:
                 mode = "Testnet" if self.demo_mode else "Live"
                 print(f"✅ Connected to Bybit {mode}")
-                self._set_leverage()
                 return True
             return False
         except Exception as e:
             print(f"❌ Connection error: {e}")
             return False
-
-    def _set_leverage(self):
-        try:
-            result = self.exchange.set_leverage(
-                category="linear",
-                symbol=self.linear,
-                buyLeverage=str(self.risk_manager.leverage),
-                sellLeverage=str(self.risk_manager.leverage)
-            )
-            if result.get('retCode') != 0:
-                print(f"⚠️ Failed to set leverage: {result.get('retMsg')}")
-            else:
-                print(f"✅ Leverage set to {self.risk_manager.leverage}x")
-        except Exception as e:
-            print(f"❌ Leverage setting error: {e}")
     
     def get_market_data(self):
         try:
@@ -95,16 +81,7 @@ class TradeEngine:
             print(f"❌ Market data error: {e}")
             return None
     
-    def get_account_balance(self):
-        try:
-            resp = self.exchange.get_wallet_balance(accountType="UNIFIED")
-            if resp.get('retCode') == 0 and resp.get('result', {}).get('list'):
-                return float(resp['result']['list'][0].get('totalEquity', 0))
-            return 0
-        except:
-            return 0
-
-    def get_wallet_balance_only(self):
+    def get_wallet_balance(self):
         try:
             resp = self.exchange.get_wallet_balance(accountType="UNIFIED")
             if resp.get('retCode') == 0:
@@ -116,63 +93,41 @@ class TradeEngine:
             return 0
 
     def check_position(self):
-        """Proper position detection"""
+        """Simple position check"""
         try:
             pos_resp = self.exchange.get_positions(category="linear", symbol=self.linear)
             if pos_resp.get('retCode') != 0:
+                self.position = None
                 return None
                 
             positions = pos_resp.get('result', {}).get('list', [])
             if not positions:
                 self.position = None
-                self.profit_lock_active = False
                 return None
             
             position = positions[0]
             position_size = float(position.get('size', 0))
             
-            # Only consider it a position if size > 0
             if position_size <= 0:
                 self.position = None
-                self.profit_lock_active = False
                 return None
             
-            # We have an active position
-            unrealized_pnl = float(position.get('unrealisedPnl', 0))
-            avg_price = float(position.get('avgPrice', 0))
-            leverage = float(position.get('leverage', self.risk_manager.leverage))
-            
-            # Calculate position metrics
-            position_value = position_size * avg_price
-            margin_used = position_value / leverage
-            
-            # Calculate position P&L% correctly
-            if margin_used > 0:
-                position_pnl_pct = (unrealized_pnl / margin_used) * 100
-            else:
-                position_pnl_pct = 0
-            
-            # Calculate wallet impact
-            wallet_balance = self.get_wallet_balance_only()
-            wallet_pnl_pct = (unrealized_pnl / wallet_balance) * 100 if wallet_balance > 0 else 0
-            
+            # We have a position
             self.position = {
                 'side': position.get('side'),
                 'size': position_size,
-                'avg_price': avg_price,
-                'unrealized_pnl': unrealized_pnl,
-                'position_pnl_pct': position_pnl_pct,
-                'wallet_pnl_pct': wallet_pnl_pct,
-                'margin_used': margin_used,
-                'position_value': position_value,
-                'leverage': leverage,
-                'liq_price': float(position.get('liqPrice', 0))
+                'avg_price': float(position.get('avgPrice', 0)),
+                'unrealized_pnl': float(position.get('unrealisedPnl', 0))
             }
+            
+            self.entry_price = self.position['avg_price']
+            self.position_side = self.position['side'].lower()
             
             return self.position
             
         except Exception as e:
             print(f"❌ Position check error: {e}")
+            self.position = None
             return None
 
     def get_symbol_info(self):
@@ -209,73 +164,71 @@ class TradeEngine:
         return f"{price:.{decimals}f}"
 
     async def handle_risk_management(self, current_price):
-        """Risk management with position P&L%"""
-        if not self.position:
+        """Simple risk management"""
+        if not self.position or not self.entry_price:
             return
             
-        position_pnl_pct = self.position['position_pnl_pct']
-        wallet_pnl_pct = self.position['wallet_pnl_pct']
-        
-        # PRIORITY 1: Profit Protection
-        if self.risk_manager.should_take_profit_protection(position_pnl_pct):
-            print(f"\n💰 PROFIT PROTECTION: {position_pnl_pct:.1f}% pos ({wallet_pnl_pct:.2f}% wallet)")
-            await self.close_position("Profit Protection")
-            return
-        
-        # PRIORITY 2: Profit Lock
-        if not self.profit_lock_active and self.risk_manager.should_activate_profit_lock(position_pnl_pct):
-            self.profit_lock_active = True
-            print(f"\n🔓 PROFIT LOCK: {position_pnl_pct:.1f}% pos ({wallet_pnl_pct:.2f}% wallet)")
-            
-            await self.notifier.profit_lock_activated(
-                self.symbol, wallet_pnl_pct, self.risk_manager.trailing_stop_distance * 100
-            )
-            
-            await self._set_trailing_stop(current_price)
+        # Check for profit lock activation
+        if not self.profit_lock_active:
+            if self.risk_manager.should_activate_profit_lock(
+                self.entry_price, current_price, self.position_side):
+                
+                self.profit_lock_active = True
+                print(f"\n🔒 PROFIT LOCK ACTIVATED")
+                
+                # Set trailing stop
+                await self._set_trailing_stop(current_price)
+                
+                await self.notifier.profit_lock_activated(
+                    self.symbol, 0, self.risk_manager.trailing_stop_pct * 100
+                )
 
     async def _set_trailing_stop(self, current_price):
-        info = self.get_symbol_info()
-        if info:
-            trailing_distance = self.risk_manager.get_trailing_stop_distance_absolute(current_price)
-            formatted_trailing_distance = self.format_price(info, trailing_distance)
+        """Set trailing stop"""
+        try:
+            info = self.get_symbol_info()
+            if not info:
+                return
+                
+            trailing_price = self.risk_manager.get_trailing_stop_price(
+                current_price, self.position_side)
+            
+            trailing_distance = abs(current_price - trailing_price)
+            formatted_trailing = self.format_price(info, trailing_distance)
             
             resp = self.exchange.set_trading_stop(
                 category="linear",
                 symbol=self.linear,
                 positionIdx=0,
-                trailingStop=formatted_trailing_distance
+                trailingStop=formatted_trailing
             )
             
             if resp.get('retCode') == 0:
-                print(f"✅ Trailing stop set: {formatted_trailing_distance}")
+                print(f"✅ Trailing stop: ${formatted_trailing}")
+            else:
+                print(f"⚠️ Trailing stop failed: {resp.get('retMsg')}")
+                
+        except Exception as e:
+            print(f"⚠️ Trailing stop error: {e}")
 
     async def open_position(self, signal):
+        """Open position with simple risk management"""
         try:
-            # Force close existing position first
+            # Close existing position first
             if self.position:
-                print(f"⚠️ Force closing existing position first")
                 await self.close_position("Force Close")
-                await asyncio.sleep(2)  # Wait for close to complete
+                await asyncio.sleep(2)
                 
-                # Refresh position status
                 self.check_position()
                 if self.position:
                     print(f"❌ Could not close existing position")
                     return False
             
-            wallet_balance = self.get_wallet_balance_only()
-            ticker = self.exchange.get_tickers(category="linear", symbol=self.linear)
-            current_price = float(ticker['result']['list'][0]['lastPrice'])
+            wallet_balance = self.get_wallet_balance()
+            current_price = signal['price']
             
-            # Calculate position details
+            # Calculate position size
             position_size = self.risk_manager.calculate_position_size(wallet_balance, current_price)
-            position_value = position_size * current_price
-            required_margin = position_value / self.risk_manager.leverage
-            
-            # Safety check
-            if required_margin > wallet_balance * 0.5:
-                print(f"❌ Position too large! Required: ${required_margin:.2f}, Wallet: ${wallet_balance:.2f}")
-                return False
             
             info = self.get_symbol_info()
             if not info:
@@ -285,6 +238,7 @@ class TradeEngine:
             side = "Buy" if signal['action'] == 'BUY' else "Sell"
             
             print(f"\n📈 Opening {side}: {qty} @ ${current_price:.4f}")
+            print(f"💰 Risk: ${self.risk_manager.fixed_risk_usd:.0f}")
             
             # Place order
             order = self.exchange.place_order(
@@ -299,10 +253,13 @@ class TradeEngine:
                 print(f"❌ Order failed: {order.get('retMsg')}")
                 return False
             
-            # Set stop loss
-            await self._set_stop_loss(signal, current_price, info)
+            # Set stop loss and take profit
+            await self._set_stop_and_tp(signal, current_price, info)
             
             self.profit_lock_active = False
+            self.entry_price = current_price
+            self.position_side = side.lower()
+            
             await self.notifier.trade_opened(self.symbol, current_price, float(qty), side)
             return True
             
@@ -310,28 +267,35 @@ class TradeEngine:
             print(f"❌ Position open error: {e}")
             return False
     
-    async def _set_stop_loss(self, signal, current_price, info):
+    async def _set_stop_and_tp(self, signal, current_price, info):
+        """Set stop loss and take profit"""
         try:
-            if signal['action'] == 'BUY':
-                sl = self.risk_manager.get_stop_loss(current_price, 'long')
-            else:
-                sl = self.risk_manager.get_stop_loss(current_price, 'short')
+            side = 'long' if signal['action'] == 'BUY' else 'short'
             
+            sl_price = self.risk_manager.get_stop_loss_price(current_price, side)
+            tp_price = self.risk_manager.get_take_profit_price(current_price, side)
+            
+            # Set both SL and TP
             stop_resp = self.exchange.set_trading_stop(
                 category="linear",
                 symbol=self.linear,
                 positionIdx=0,
-                stopLoss=self.format_price(info, sl),
-                slTriggerBy="LastPrice"
+                stopLoss=self.format_price(info, sl_price),
+                takeProfit=self.format_price(info, tp_price),
+                slTriggerBy="LastPrice",
+                tpTriggerBy="LastPrice"
             )
             
             if stop_resp.get('retCode') == 0:
-                print(f"✅ Stop Loss: ${sl:.6f}")
+                print(f"✅ SL: ${sl_price:.4f} | TP: ${tp_price:.4f}")
+            else:
+                print(f"⚠️ SL/TP failed: {stop_resp.get('retMsg')}")
             
         except Exception as e:
-            print(f"⚠️ Stop setting error: {e}")
+            print(f"⚠️ SL/TP error: {e}")
     
     async def close_position(self, reason="Signal"):
+        """Close position"""
         try:
             if not self.position:
                 return False
@@ -351,14 +315,17 @@ class TradeEngine:
             )
             
             if order.get('retCode') != 0:
+                print(f"❌ Close failed: {order.get('retMsg')}")
                 return False
             
-            wallet_pnl_pct = self.position.get('wallet_pnl_pct', 0)
             pnl = self.position.get('unrealized_pnl', 0)
-            await self.notifier.trade_closed(self.symbol, wallet_pnl_pct, pnl, reason)
+            await self.notifier.trade_closed(self.symbol, 0, pnl, reason)
             
             self.position = None
             self.profit_lock_active = False
+            self.entry_price = 0
+            self.position_side = None
+            
             return True
             
         except Exception as e:
@@ -366,36 +333,24 @@ class TradeEngine:
             return False
 
     async def handle_signal(self, signal):
+        """Handle trading signals"""
         if not signal:
             return
         
         if self.position:
-            await self._handle_signal_with_position(signal)
+            # Close on opposite signal
+            current_side = self.position['side']
+            is_opposite = (
+                (current_side == 'Buy' and signal['action'] == 'SELL') or 
+                (current_side == 'Sell' and signal['action'] == 'BUY')
+            )
+            
+            if is_opposite:
+                await self.close_position("Opposite Signal")
         else:
-            await self._handle_signal_no_position(signal)
-    
-    async def _handle_signal_with_position(self, signal):
-        """Handle signal when position exists - NO REVERSAL"""
-        current_side = self.position['side']
-        signal_action = signal['action']
-        
-        # Check if signal is opposite
-        is_opposite_signal = (
-            (current_side == 'Buy' and signal_action == 'SELL') or 
-            (current_side == 'Sell' and signal_action == 'BUY')
-        )
-        
-        if is_opposite_signal:
-            # Just close the position, no reversal
-            position_pnl_pct = self.position['position_pnl_pct']
-            wallet_pnl = self.position['wallet_pnl_pct']
-            print(f"\n📉 Closing on opposite signal: {position_pnl_pct:.1f}% pos ({wallet_pnl:.2f}% wallet)")
-            await self.close_position("Opposite Signal")
-    
-    async def _handle_signal_no_position(self, signal):
-        """Open new position on signal"""
-        print(f"\n🎯 Signal: {signal['action']} @ ${signal['price']:.4f}")
-        await self.open_position(signal)
+            # Open new position
+            print(f"\n🎯 Signal: {signal['action']} @ ${signal['price']:.4f}")
+            await self.open_position(signal)
 
     async def run_cycle(self):
         try:
@@ -404,17 +359,16 @@ class TradeEngine:
             if df is None or df.empty:
                 return
             
-            # Always refresh position data
-            position = self.check_position()
+            # Check position
+            self.check_position()
             
             # Get signal and current price
             signal = self.strategy.generate_signal(df)
             current_price = df['close'].iloc[-1]
             
-            # Risk management checks
-            if position:
+            # Risk management
+            if self.position:
                 await self.handle_risk_management(current_price)
-                # Refresh position after risk management
                 self.check_position()
             
             # Display status
@@ -427,40 +381,22 @@ class TradeEngine:
             print(f"\n❌ Cycle error: {e}")
     
     def _display_status(self, df, current_price):
+        """Simple status display"""
         # Get indicators
         df_with_indicators = self.strategy.calculate_indicators(df)
         current_rsi = df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators.columns else 50.0
         current_mfi = df_with_indicators['mfi'].iloc[-1] if 'mfi' in df_with_indicators.columns else 50.0
-        current_trend = df_with_indicators['trend'].iloc[-1] if 'trend' in df_with_indicators.columns else "UNKNOWN"
         
         # Position info
         position_info = 'None'
         if self.position:
-            pos_pnl = self.position['position_pnl_pct']
-            wallet_pnl = self.position['wallet_pnl_pct']
-            liq_price = self.position.get('liq_price', 0)
-            risk_zone = self.risk_manager.get_risk_zone(pos_pnl)
-            zone_emoji = {
-                'PROFIT_PROTECTION': '💰',
-                'PROFIT_LOCK': '🔒',
-                'NORMAL': ''
-            }.get(risk_zone, '')
-            
-            # Calculate liquidation distance
-            if liq_price > 0:
-                liq_distance = abs(liq_price - current_price) / current_price * 100
-                liq_info = f" Liq:{liq_distance:.1f}%"
-            else:
-                liq_info = ""
-            
-            position_info = f"{self.position['side']} ({pos_pnl:+.1f}%pos/{wallet_pnl:+.2f}%w{liq_info}) {zone_emoji}"
-        
-        # Trend display
-        trend_emoji = {"UP": "🟢", "DOWN": "🔴", "SIDEWAYS": "🟡"}.get(current_trend, "⚪")
+            pnl = self.position['unrealized_pnl']
+            lock_status = '🔒' if self.profit_lock_active else ''
+            position_info = f"{self.position['side']} (${pnl:+.2f}) {lock_status}"
         
         status = (f"[{datetime.now().strftime('%H:%M:%S')}] "
                   f"${current_price:.4f} | RSI:{current_rsi:.1f} | MFI:{current_mfi:.1f} | "
-                  f"{trend_emoji} | {position_info}")
+                  f"Pos:{position_info}")
         
         print(f"\r{status}", end='', flush=True)
     
