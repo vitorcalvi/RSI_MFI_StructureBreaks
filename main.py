@@ -35,8 +35,6 @@ async def main():
         
         display_startup_info(engine, wallet_balance, current_price)
         
-        print("✅ All systems ready")
-        print("=" * 50)
         
         await engine.notifier.bot_started(engine.symbol, wallet_balance)
         await engine.run()
