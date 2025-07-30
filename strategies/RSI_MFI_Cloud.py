@@ -37,8 +37,9 @@ class RSIMFICloudStrategy:
         rsi = 100 - (100 / (1 + rs))
         
         return rsi.fillna(50).clip(0, 100)
-    
-    def calculate_mfi(self, high, low, close):
+
+
+    def calculate_mfi(self, high, low, close, volume):
         period = self.params['mfi_length']
         if len(close) < period + 1:
             return pd.Series([50] * len(close), index=close.index)
@@ -46,10 +47,10 @@ class RSIMFICloudStrategy:
         high = pd.Series(high).astype(float)
         low = pd.Series(low).astype(float)
         close = pd.Series(close).astype(float)
+        volume = pd.Series(volume).astype(float)
         
         typical_price = (high + low + close) / 3
-        price_range = high - low
-        money_flow = typical_price * price_range
+        money_flow = typical_price * volume  # Use volume, not price range
         
         mf_sign = typical_price.diff()
         positive_mf = money_flow.where(mf_sign > 0, 0)
@@ -62,6 +63,7 @@ class RSIMFICloudStrategy:
         mfi = 100 - (100 / (1 + mf_ratio))
         
         return mfi.fillna(50).clip(0, 100)
+
     
     def get_structure_stop(self, df, action, entry_price):
         """Calculate structure-based stop loss"""
@@ -97,13 +99,57 @@ class RSIMFICloudStrategy:
             print(f"📊 Structure Stop (LONG): ${structure_stop:.2f} ({distance_pct:.1f}% below entry)")
             return structure_stop
     
+    def detect_structure_break(self, df, current_position_side, entry_price, current_price):
+        """
+        NEW: Detect structure breaks during active positions
+        - For SHORT positions: Watch for breaks ABOVE recent resistance
+        - For LONG positions: Watch for breaks BELOW recent support
+        """
+        lookback = 20  # Same as structure stop calculation
+        
+        if len(df) < lookback:
+            return None
+        
+        recent_data = df.tail(lookback)
+        buffer = entry_price * 0.002  # 0.2% buffer to avoid false signals
+        
+        if current_position_side == 'sell':  # SHORT position
+            # Check for break above resistance (swing high)
+            resistance_level = recent_data['high'].max()
+            break_level = resistance_level + buffer
+            
+            if current_price > break_level:
+                return {
+                    'break_type': 'resistance_break',
+                    'break_level': break_level,
+                    'current_price': current_price,
+                    'suggested_action': 'CLOSE_SHORT',
+                    'flip_signal': 'BUY'  # Optional: flip to long
+                }
+                
+        elif current_position_side == 'buy':  # LONG position
+            # Check for break below support (swing low)
+            support_level = recent_data['low'].min()
+            break_level = support_level - buffer
+            
+            if current_price < break_level:
+                return {
+                    'break_type': 'support_break',
+                    'break_level': break_level,
+                    'current_price': current_price,
+                    'suggested_action': 'CLOSE_LONG',
+                    'flip_signal': 'SELL'  # Optional: flip to short
+                }
+        
+        return None
+    
     def calculate_indicators(self, df):
         df = df.copy()
         if len(df) < 2:
             return df
         
         df['rsi'] = self.calculate_rsi(df['close'])
-        df['mfi'] = self.calculate_mfi(df['high'], df['low'], df['close'])
+        df['mfi'] = self.calculate_mfi(df['high'], df['low'], df['close'], df['volume'])  # Fixed: pass volume
         
         return df
     
@@ -144,7 +190,8 @@ class RSIMFICloudStrategy:
                 'rsi': round(current_rsi, 2),
                 'mfi': round(current_mfi, 2),
                 'timestamp': df.index[-1],
-                'structure_stop': structure_stop
+                'structure_stop': structure_stop,
+                'signal_type': 'RSI_MFI'
             }
         
         # SELL signal - Both RSI and MFI overbought
@@ -163,7 +210,8 @@ class RSIMFICloudStrategy:
                 'rsi': round(current_rsi, 2),
                 'mfi': round(current_mfi, 2),
                 'timestamp': df.index[-1],
-                'structure_stop': structure_stop
+                'structure_stop': structure_stop,
+                'signal_type': 'RSI_MFI'
             }
         
         return None

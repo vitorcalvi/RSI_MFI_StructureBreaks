@@ -18,6 +18,7 @@ class TradeEngine:
         
         print("✅ Risk management initialized")
         print("✅ RSI/MFI strategy loaded")
+        print("🆕 Structure break monitoring enabled")
         
         self.notifier = TelegramNotifier()
         
@@ -42,6 +43,9 @@ class TradeEngine:
         self.position_side = None
         self.position_start_time = None
         self.pending_order = None
+        
+        # Structure break settings
+        self.enable_position_flipping = True  # Set to False to only close on breaks
         
         # Error tracking
         self._last_market_data_error = None
@@ -216,6 +220,50 @@ class TradeEngine:
         decimals = len(tick_str.split('.')[1]) if '.' in tick_str else 0
         return f"{price:.{decimals}f}"
 
+    async def check_structure_breaks(self, df, current_price):
+        """
+        NEW: Check for structure breaks during active positions
+        """
+        if not self.position or not self.entry_price:
+            return None
+        
+        break_signal = self.strategy.detect_structure_break(
+            df, self.position_side, self.entry_price, current_price)
+        
+        if break_signal:
+            break_type = break_signal['break_type']
+            break_level = break_signal['break_level']
+            
+            print(f"\n🚨 STRUCTURE BREAK | {break_type.upper()} | Level: ${break_level:.2f} | Price: ${current_price:.2f}")
+            
+            # Close current position immediately
+            close_success = await self.close_position(f"Structure Break ({break_type})")
+            
+            if close_success and self.enable_position_flipping:
+                # Optional: Flip to opposite position
+                flip_action = break_signal['flip_signal']
+                
+                # Wait a moment for position to clear
+                await asyncio.sleep(1)
+                
+                # Create flip signal
+                flip_signal = {
+                    'action': flip_action,
+                    'price': current_price,
+                    'rsi': 50.0,  # Neutral values since this is structure-based
+                    'mfi': 50.0,
+                    'timestamp': df.index[-1] if len(df) > 0 else datetime.now(),
+                    'structure_stop': None,  # Will be calculated in open_position
+                    'signal_type': 'STRUCTURE_FLIP'
+                }
+                
+                print(f"🔄 FLIPPING | {flip_action} after structure break")
+                await self.open_position(flip_signal)
+            
+            return break_signal
+        
+        return None
+
     async def handle_risk_management(self, current_price):
         """Handle profit lock activation"""
         if not self.position or not self.entry_price:
@@ -289,6 +337,13 @@ class TradeEngine:
                 current_price = signal['price']
                 structure_stop = signal.get('structure_stop')  # Get structure stop from signal
                 
+                # For structure flip signals, calculate structure stop
+                if signal.get('signal_type') == 'STRUCTURE_FLIP':
+                    # Get market data to calculate structure stop
+                    df = self.get_market_data()
+                    if df is not None:
+                        structure_stop = self.strategy.get_structure_stop(df, signal['action'], current_price)
+                
                 # Calculate position size with structure stop
                 position_size = self.risk_manager.calculate_position_size(
                     wallet_balance, current_price, structure_stop)
@@ -313,6 +368,7 @@ class TradeEngine:
                 actual_rr = actual_reward / actual_risk if actual_risk > 0 else 4.0
                 
                 # Store for display
+                signal_type_display = signal.get('signal_type', 'RSI_MFI')
                 self.pending_order = {
                     'action': signal['action'],
                     'qty': qty,
@@ -323,7 +379,8 @@ class TradeEngine:
                     'reward_amount': actual_reward,
                     'rr_ratio': actual_rr,
                     'structure_based': structure_stop is not None,
-                    'structure_stop': structure_stop
+                    'structure_stop': structure_stop,
+                    'signal_type': signal_type_display
                 }
                 
                 # Place order
@@ -361,8 +418,6 @@ class TradeEngine:
                 self.pending_order = None
                 return False
 
-
- 
     async def _set_stop_and_tp(self, signal, current_price, info, structure_stop=None):
         """Set stop loss and take profit with structure stops"""
         try:
@@ -464,9 +519,19 @@ class TradeEngine:
             # Check position
             self.check_position()
             
-            # Get signal and current price
-            signal = self.strategy.generate_signal(df)
+            # Get current price
             current_price = df['close'].iloc[-1]
+            
+            # NEW: Check for structure breaks FIRST during active positions
+            if self.position:
+                structure_break = await self.check_structure_breaks(df, current_price)
+                if structure_break:
+                    # Structure break handled, skip normal signal processing
+                    self._display_status(df, current_price)
+                    return
+            
+            # Get normal RSI/MFI signal
+            signal = self.strategy.generate_signal(df)
             
             # Risk management
             if self.position:
@@ -487,8 +552,6 @@ class TradeEngine:
                 print(f"\n❌ API Error | Connection Lost | Reconnecting... | {e}")
                 self._last_cycle_error = now
 
-
-
     def _display_status(self, df, current_price):
         """Display consolidated status format with structure stop info"""
         # Get indicators
@@ -502,9 +565,11 @@ class TradeEngine:
         if self.pending_order:
             # Position just opened - show full opening info (3 lines)
             direction_emoji = "📈" if self.pending_order['action'] == 'BUY' else "📉"
+            signal_type = self.pending_order.get('signal_type', 'RSI_MFI')
+            signal_emoji = "🎯" if signal_type == 'RSI_MFI' else "⚡"
             
-            # Line 1: Opening info
-            opening_line = f"[{timestamp}] {symbol_short} | RSI: {current_rsi:.1f} | MFI: {current_mfi:.1f} | {direction_emoji} {self.pending_order['action']} {self.pending_order['qty']} @ ${self.pending_order['price']:.2f}"
+            # Line 1: Opening info with signal type
+            opening_line = f"[{timestamp}] {symbol_short} | RSI: {current_rsi:.1f} | MFI: {current_mfi:.1f} | {direction_emoji} {signal_emoji} {self.pending_order['action']} {self.pending_order['qty']} @ ${self.pending_order['price']:.2f}"
             print(f"\n{opening_line}")
             
             # Line 2: Risk details with structure stop info
