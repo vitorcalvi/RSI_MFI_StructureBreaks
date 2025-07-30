@@ -272,91 +272,106 @@ class TradeEngine:
             print(f"\n⚠️ SL/TP Warning | Trailing Error | {e}")
 
     async def open_position(self, signal):
-        """Open position with consolidated display"""
-        try:
-            # Close existing position first
-            if self.position:
-                print(f"\n🔄 Force Close | Clearing position for new signal")
-                await self.close_position("Force Close")
-                await asyncio.sleep(2)
-                
-                self.check_position()
+            """Open position with structure-based stops"""
+            try:
+                # Close existing position first
                 if self.position:
-                    print(f"❌ Force Close Failed | Manual intervention required")
+                    print(f"\n🔄 Force Close | Clearing position for new signal")
+                    await self.close_position("Force Close")
+                    await asyncio.sleep(2)
+                    
+                    self.check_position()
+                    if self.position:
+                        print(f"❌ Force Close Failed | Manual intervention required")
+                        return False
+                
+                wallet_balance = self.get_wallet_balance()
+                current_price = signal['price']
+                structure_stop = signal.get('structure_stop')  # Get structure stop from signal
+                
+                # Calculate position size with structure stop
+                position_size = self.risk_manager.calculate_position_size(
+                    wallet_balance, current_price, structure_stop)
+                
+                info = self.get_symbol_info()
+                if not info:
                     return False
-            
-            wallet_balance = self.get_wallet_balance()
-            current_price = signal['price']
-            
-            # Calculate position size
-            position_size = self.risk_manager.calculate_position_size(wallet_balance, current_price)
-            
-            info = self.get_symbol_info()
-            if not info:
-                return False
-            
-            qty = self.format_qty(info, position_size)
-            side = "Buy" if signal['action'] == 'BUY' else "Sell"
-            
-            # Calculate risk values for display
-            side_type = 'long' if signal['action'] == 'BUY' else 'short'
-            sl_price = self.risk_manager.get_stop_loss_price(current_price, side_type)
-            tp_price = self.risk_manager.get_take_profit_price(current_price, side_type)
-            
-            # Store for display
-            self.pending_order = {
-                'action': signal['action'],
-                'qty': qty,
-                'price': current_price,
-                'sl_price': sl_price,
-                'tp_price': tp_price,
-                'risk_amount': self.risk_manager.fixed_risk_usd,
-                'reward_amount': self.risk_manager.fixed_risk_usd * (self.risk_manager.take_profit_pct / self.risk_manager.stop_loss_pct),
-                'rr_ratio': self.risk_manager.take_profit_pct / self.risk_manager.stop_loss_pct
-            }
-            
-            # Place order
-            order = self.exchange.place_order(
-                category="linear",
-                symbol=self.linear,
-                side=side,
-                orderType="Market",
-                qty=qty
-            )
-            
-            if order.get('retCode') != 0:
-                print(f"\n❌ Order Failed | {order.get('retMsg')} | Retry in 5s")
+                
+                qty = self.format_qty(info, position_size)
+                side = "Buy" if signal['action'] == 'BUY' else "Sell"
+                
+                # Calculate risk values for display with structure stops
+                side_type = 'long' if signal['action'] == 'BUY' else 'short'
+                sl_price = self.risk_manager.get_stop_loss_price(
+                    current_price, side_type, structure_stop)
+                tp_price = self.risk_manager.get_take_profit_price(
+                    current_price, side_type, structure_stop)
+                
+                # Calculate actual risk amounts
+                actual_risk = float(qty) * abs(current_price - sl_price)
+                actual_reward = float(qty) * abs(tp_price - current_price)
+                actual_rr = actual_reward / actual_risk if actual_risk > 0 else 4.0
+                
+                # Store for display
+                self.pending_order = {
+                    'action': signal['action'],
+                    'qty': qty,
+                    'price': current_price,
+                    'sl_price': sl_price,
+                    'tp_price': tp_price,
+                    'risk_amount': actual_risk,
+                    'reward_amount': actual_reward,
+                    'rr_ratio': actual_rr,
+                    'structure_based': structure_stop is not None,
+                    'structure_stop': structure_stop
+                }
+                
+                # Place order
+                order = self.exchange.place_order(
+                    category="linear",
+                    symbol=self.linear,
+                    side=side,
+                    orderType="Market",
+                    qty=qty
+                )
+                
+                if order.get('retCode') != 0:
+                    print(f"\n❌ Order Failed | {order.get('retMsg')} | Retry in 5s")
+                    self.pending_order = None
+                    return False
+                
+                # Set stop loss and take profit with structure stops
+                await self._set_stop_and_tp(signal, current_price, info, structure_stop)
+                
+                # Set initial position state
+                self.profit_lock_active = False
+                self.entry_price = current_price
+                self.position_side = side.lower()
+                self.position_start_time = datetime.now()
+                
+                # Wait for position to be detected
+                await asyncio.sleep(1)
+                self.check_position()
+                
+                await self.notifier.trade_opened(self.symbol, current_price, float(qty), side)
+                return True
+                
+            except Exception as e:
+                print(f"\n❌ Order Failed | {e} | Retry in 5s")
                 self.pending_order = None
                 return False
-            
-            # Set stop loss and take profit
-            await self._set_stop_and_tp(signal, current_price, info)
-            
-            # Set initial position state
-            self.profit_lock_active = False
-            self.entry_price = current_price
-            self.position_side = side.lower()
-            self.position_start_time = datetime.now()
-            
-            # Wait for position to be detected
-            await asyncio.sleep(1)
-            self.check_position()
-            
-            await self.notifier.trade_opened(self.symbol, current_price, float(qty), side)
-            return True
-            
-        except Exception as e:
-            print(f"\n❌ Order Failed | {e} | Retry in 5s")
-            self.pending_order = None
-            return False
-    
-    async def _set_stop_and_tp(self, signal, current_price, info):
-        """Set stop loss and take profit"""
+
+
+ 
+    async def _set_stop_and_tp(self, signal, current_price, info, structure_stop=None):
+        """Set stop loss and take profit with structure stops"""
         try:
             side = 'long' if signal['action'] == 'BUY' else 'short'
             
-            sl_price = self.risk_manager.get_stop_loss_price(current_price, side)
-            tp_price = self.risk_manager.get_take_profit_price(current_price, side)
+            sl_price = self.risk_manager.get_stop_loss_price(
+                current_price, side, structure_stop)
+            tp_price = self.risk_manager.get_take_profit_price(
+                current_price, side, structure_stop)
             
             # Set both SL and TP
             stop_resp = self.exchange.set_trading_stop(
@@ -408,7 +423,7 @@ class TradeEngine:
             pnl = self.position.get('unrealized_pnl', 0)
             result = "Win" if pnl > 0 else "Loss"
             
-            print(f"\n📉 CLOSED | {reason} | Duration: {duration} | PnL: {pnl:+.2f} | {result}")
+            print(f"\n📉 CLOSED | {reason} | ⏱️ Duration: {duration} | PnL: {pnl:+.2f} | {result}")
             
             await self.notifier.trade_closed(self.symbol, 0, pnl, reason)
             
@@ -471,9 +486,11 @@ class TradeEngine:
                 (now - self._last_cycle_error).seconds > 30):
                 print(f"\n❌ API Error | Connection Lost | Reconnecting... | {e}")
                 self._last_cycle_error = now
-    
+
+
+
     def _display_status(self, df, current_price):
-        """Display consolidated status format"""
+        """Display consolidated status format with structure stop info"""
         # Get indicators
         df_with_indicators = self.strategy.calculate_indicators(df)
         current_rsi = df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators.columns else 50.0
@@ -490,9 +507,12 @@ class TradeEngine:
             opening_line = f"[{timestamp}] {symbol_short} | RSI: {current_rsi:.1f} | MFI: {current_mfi:.1f} | {direction_emoji} {self.pending_order['action']} {self.pending_order['qty']} @ ${self.pending_order['price']:.2f}"
             print(f"\n{opening_line}")
             
-            # Line 2: Risk details
+            # Line 2: Risk details with structure stop info
+            stop_type = "Structure" if self.pending_order.get('structure_based') else "Fixed"
+            stop_distance_pct = abs(self.pending_order['price'] - self.pending_order['sl_price']) / self.pending_order['price'] * 100
+            
             risk_line = (f"💰 Risk: ${self.pending_order['risk_amount']:.0f} | "
-                        f"SL: ${self.pending_order['sl_price']:.2f} (-${self.pending_order['risk_amount']:.0f}) | "
+                        f"SL: ${self.pending_order['sl_price']:.2f} ({stop_type} {stop_distance_pct:.1f}%) | "
                         f"TP: ${self.pending_order['tp_price']:.2f} (+${self.pending_order['reward_amount']:.0f}) | "
                         f"R:R 1:{self.pending_order['rr_ratio']:.1f}")
             print(f"{risk_line}")

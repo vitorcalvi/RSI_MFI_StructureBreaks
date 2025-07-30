@@ -63,6 +63,40 @@ class RSIMFICloudStrategy:
         
         return mfi.fillna(50).clip(0, 100)
     
+    def get_structure_stop(self, df, action, entry_price):
+        """Calculate structure-based stop loss"""
+        lookback = 20  # Look back 20 bars (100 minutes on 5m chart)
+        
+        if len(df) < lookback:
+            # Fallback to fixed % if not enough data
+            buffer = entry_price * 0.002  # 0.2% buffer
+            if action == 'SELL':
+                fixed_stop = entry_price * 1.015 + buffer  # 1.5% above entry + buffer
+                print(f"📊 Using Fixed Stop (insufficient data): ${fixed_stop:.2f}")
+                return fixed_stop
+            else:
+                fixed_stop = entry_price * 0.985 - buffer  # 1.5% below entry - buffer
+                print(f"📊 Using Fixed Stop (insufficient data): ${fixed_stop:.2f}")
+                return fixed_stop
+        
+        recent_data = df.tail(lookback)
+        buffer = entry_price * 0.002  # 0.2% buffer to avoid wicks
+        
+        if action == 'SELL':  # Short position
+            # Stop above recent swing high
+            swing_high = recent_data['high'].max()
+            structure_stop = swing_high + buffer
+            distance_pct = (structure_stop - entry_price) / entry_price * 100
+            print(f"📊 Structure Stop (SHORT): ${structure_stop:.2f} ({distance_pct:.1f}% above entry)")
+            return structure_stop
+        else:  # Long position  
+            # Stop below recent swing low
+            swing_low = recent_data['low'].min()
+            structure_stop = swing_low - buffer
+            distance_pct = (entry_price - structure_stop) / entry_price * 100
+            print(f"📊 Structure Stop (LONG): ${structure_stop:.2f} ({distance_pct:.1f}% below entry)")
+            return structure_stop
+    
     def calculate_indicators(self, df):
         df = df.copy()
         if len(df) < 2:
@@ -101,12 +135,16 @@ class RSIMFICloudStrategy:
             
             self.last_signal = 'BUY'
             
+            # Calculate structure-based stop
+            structure_stop = self.get_structure_stop(df, 'BUY', current_price)
+            
             return {
                 'action': 'BUY',
                 'price': current_price,
                 'rsi': round(current_rsi, 2),
                 'mfi': round(current_mfi, 2),
-                'timestamp': df.index[-1]
+                'timestamp': df.index[-1],
+                'structure_stop': structure_stop
             }
         
         # SELL signal - Both RSI and MFI overbought
@@ -116,12 +154,16 @@ class RSIMFICloudStrategy:
             
             self.last_signal = 'SELL'
             
+            # Calculate structure-based stop
+            structure_stop = self.get_structure_stop(df, 'SELL', current_price)
+            
             return {
                 'action': 'SELL',
                 'price': current_price,
                 'rsi': round(current_rsi, 2),
                 'mfi': round(current_mfi, 2),
-                'timestamp': df.index[-1]
+                'timestamp': df.index[-1],
+                'structure_stop': structure_stop
             }
         
         return None

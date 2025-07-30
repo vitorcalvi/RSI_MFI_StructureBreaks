@@ -35,7 +35,6 @@ async def main():
         
         display_startup_info(engine, wallet_balance, current_price)
         
-        
         await engine.notifier.bot_started(engine.symbol, wallet_balance)
         await engine.run()
         
