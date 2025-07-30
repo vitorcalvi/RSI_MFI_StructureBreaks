@@ -14,10 +14,9 @@ class RiskManager:
         # With 25x leverage, these translate to wallet impact
         self.profit_lock_threshold = 0.5 * self.leverage        # 12.5% position P&L = 0.5% wallet impact
         self.profit_protection_threshold = 2.0 * self.leverage  # 50% position P&L = 2.0% wallet impact  
-        self.loss_reversal_threshold = -1.0 * self.leverage     # -25% position P&L = -1.0% wallet impact
+        self.loss_reversal_threshold = -10.0  # FIXED: -10.0% position P&L = -1.0% wallet impact
         
-        # Cooldown cycles
-        self.reversal_cooldown_cycles = self.config.get('signal_cooldown', 2)
+        # REMOVED: All cooldown references
     
     def _load_config(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -59,7 +58,7 @@ class RiskManager:
         return position_pnl_pct >= self.profit_protection_threshold
     
     def should_reverse_for_loss(self, position_pnl_pct):
-        """FIXED: Reverse at -25% position P&L (-1.0% wallet impact)"""
+        """FIXED: Reverse at -10% position P&L (-1.0% wallet impact)"""
         return position_pnl_pct <= self.loss_reversal_threshold
     
     def get_stop_loss(self, entry_price, side='long'):
@@ -101,5 +100,5 @@ class RiskManager:
             'loss_reversal_threshold': self.loss_reversal_threshold,  # Position P&L%
             'wallet_profit_lock': self.profit_lock_threshold / self.leverage,  # Wallet impact
             'wallet_profit_protection': self.profit_protection_threshold / self.leverage,  # Wallet impact
-            'wallet_loss_reversal': self.loss_reversal_threshold / self.leverage  # Wallet impact
+            'wallet_loss_reversal': -1.0  # FIXED: Show -1.0% wallet impact for -10% position P&L
         }

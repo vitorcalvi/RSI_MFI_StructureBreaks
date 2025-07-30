@@ -13,7 +13,7 @@ if project_root not in sys.path:
 from core.trade_engine import TradeEngine
 
 def display_info(engine, total_equity, current_price):
-    """FIXED: Display with correct leverage calculations"""
+    """FIXED: Display with correct leverage calculations - NO COOLDOWN"""
     wallet_balance = engine.get_wallet_balance_only()
     risk_summary = engine.risk_manager.get_risk_summary(wallet_balance)
     
@@ -30,21 +30,22 @@ def display_info(engine, total_equity, current_price):
     print(f"🔓 Profit Lock: {risk_summary['profit_lock_threshold']:.1f}% position P&L → {risk_summary['wallet_profit_lock']:.2f}% wallet impact")
     print(f"💰 Profit Protection: {risk_summary['profit_protection_threshold']:.1f}% position P&L → {risk_summary['wallet_profit_protection']:.2f}% wallet impact")
     
-    print(f"\n🔄 REVERSAL THRESHOLDS (FIXED):")
-    print(f"📉 Loss Reversal: {risk_summary['loss_reversal_threshold']:.1f}% position P&L → {risk_summary['wallet_loss_reversal']:.2f}% wallet impact")
+    print(f"\n🔄 REVERSAL THRESHOLDS (FIXED - NO COOLDOWN):")
+    print(f"📉 Loss Reversal: -10.0% position P&L → -1.00% wallet impact")
     
     print(f"\n🎮 STRATEGY:")
     print(f"📈 RSI: {engine.strategy.params['oversold_level']}/{engine.strategy.params['overbought_level']} (Length: {engine.strategy.params['rsi_length']})")
     print(f"🎯 Trend Filter: {'ON' if engine.strategy.params.get('require_trend', False) else 'OFF'}")
-    print(f"⏱️ Cooldown: {engine.strategy.params['signal_cooldown']} periods")
+    print(f"⏱️ Cooldown: COMPLETELY REMOVED")
     
     print(f"\n✅ LEVERAGE INTEGRATION:")
     print(f"📊 25x leverage PROPERLY calculated in all risk thresholds")
     print(f"🎯 Position P&L% used for triggers (accounts for leverage automatically)")
     print(f"💡 Wallet impact shown for transparency")
+    print(f"🚀 NO COOLDOWN - Instant reversals when conditions met")
 
 async def main():
-    print("🤖 ZORA Trading Bot - LEVERAGE FIXED")
+    print("🤖 ZORA Trading Bot - COOLDOWN REMOVED & REVERSAL FIXED")
     print("=" * 50)
     
     engine = None

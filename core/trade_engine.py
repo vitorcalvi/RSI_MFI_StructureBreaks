@@ -29,12 +29,11 @@ class TradeEngine:
             self.api_key = os.getenv('LIVE_BYBIT_API_KEY')
             self.api_secret = os.getenv('LIVE_BYBIT_API_SECRET')
         
-        # State
+        # State - REMOVED: All cooldown references
         self.exchange = None
         self.running = False
         self.position = None
         self.profit_lock_active = False
-        self.reversal_cooldown_cycles = 0
     
     def connect(self):
         try:
@@ -379,10 +378,7 @@ class TradeEngine:
             if order.get('retCode') != 0:
                 return False
             
-            # Handle cooldown for loss reversals only
-            position_pnl_pct = self.position.get('position_pnl_pct', 0)
-            if reason == "Loss Reversal":
-                self.reversal_cooldown_cycles = self.risk_manager.reversal_cooldown_cycles
+            # REMOVED: All cooldown logic
             
             wallet_pnl_pct = self.position.get('wallet_pnl_pct', 0)
             pnl = self.position.get('unrealized_pnl', 0)
@@ -406,7 +402,7 @@ class TradeEngine:
             await self._handle_signal_no_position(signal)
     
     async def _handle_signal_with_position(self, signal):
-        """FIXED: Only reverse on loss using position P&L%"""
+        """FIXED: Only reverse on loss using position P&L% - NO COOLDOWN"""
         current_side = self.position['side']
         position_pnl_pct = self.position['position_pnl_pct']  # FIXED: Use position P&L%
         signal_action = signal['action']
@@ -418,7 +414,7 @@ class TradeEngine:
         )
         
         if should_reverse:
-            # FIXED: Only reverse on loss using position P&L%
+            # FIXED: Only reverse on loss using position P&L% - NO COOLDOWN CHECK
             if self.risk_manager.should_reverse_for_loss(position_pnl_pct):
                 wallet_pnl = self.position['wallet_pnl_pct']
                 print(f"\n🔄 Reversing: {position_pnl_pct:.1f}% pos ({wallet_pnl:.2f}% wallet)")
@@ -427,11 +423,9 @@ class TradeEngine:
                 await self.open_position(signal)
     
     async def _handle_signal_no_position(self, signal):
-        if self.reversal_cooldown_cycles > 0:
-            print(f"\n⏸️ Cooldown active ({self.reversal_cooldown_cycles} cycles)")
-        else:
-            print(f"\n🎯 Signal: {signal['action']} @ ${signal['price']:.4f}")
-            await self.open_position(signal)
+        # REMOVED: All cooldown logic
+        print(f"\n🎯 Signal: {signal['action']} @ ${signal['price']:.4f}")
+        await self.open_position(signal)
 
     async def run_cycle(self):
         try:
@@ -447,9 +441,7 @@ class TradeEngine:
             signal = self.strategy.generate_signal(df)
             current_price = df['close'].iloc[-1]
             
-            # Handle cooldown
-            if self.reversal_cooldown_cycles > 0:
-                self.reversal_cooldown_cycles -= 1
+            # REMOVED: All cooldown handling
             
             # Risk management checks (using fresh position data)
             if position:
@@ -472,7 +464,7 @@ class TradeEngine:
         current_mfi = df_with_indicators['mfi'].iloc[-1] if 'mfi' in df_with_indicators.columns else 50.0
         current_trend = df_with_indicators['trend'].iloc[-1] if 'trend' in df_with_indicators.columns else "UNKNOWN"
         
-        # FIXED: Position info with position P&L%
+        # FIXED: Position info with position P&L% - REMOVED COOLDOWN
         position_info = 'None'
         if self.position:
             pos_pnl = self.position['position_pnl_pct']
@@ -498,12 +490,11 @@ class TradeEngine:
         # Trend display
         trend_emoji = {"UP": "🟢", "DOWN": "🔴", "SIDEWAYS": "🟡"}.get(current_trend, "⚪")
         
-        # Cooldown info
-        cooldown_info = f' [Cooldown: {self.reversal_cooldown_cycles}]' if self.reversal_cooldown_cycles > 0 else ''
+        # REMOVED: All cooldown display logic
         
         status = (f"[{datetime.now().strftime('%H:%M:%S')}] "
                   f"${current_price:.4f} | RSI:{current_rsi:.1f} | MFI:{current_mfi:.1f} | "
-                  f"{trend_emoji} | {position_info}{cooldown_info}")
+                  f"{trend_emoji} | {position_info}")
         
         print(f"\r{status}", end='', flush=True)
     
