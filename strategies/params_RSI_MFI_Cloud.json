@@ -1,5 +1,5 @@
 {
-  "symbol": "ZORA/USDT",
+  "symbol": "ETH/USDT",
   "rsi_length": 5,
   "mfi_length": 5,
   "atr_period": 7,

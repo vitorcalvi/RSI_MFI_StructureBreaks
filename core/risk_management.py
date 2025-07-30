@@ -5,18 +5,15 @@ class RiskManager:
     def __init__(self):
         self._load_config()
         
-        self.leverage = 10                      # 25x leverage
-        self.max_position_size = 0.002          # 0.2% of wallet balance
+        # Set leverage to 25x everywhere
+        self.leverage = 25                      # 25x leverage
+        self.max_position_size = 0.1          # 0.2% of wallet balance
         self.stop_loss_pct = 0.015              # 1.5% stop loss distance
         self.trailing_stop_distance = 0.01      # 1% trailing distance
         
-        # FIXED: Risk thresholds based on POSITION P&L (not wallet P&L)
-        # With 25x leverage, these translate to wallet impact
-        self.profit_lock_threshold = 0.5 * self.leverage        # 12.5% position P&L = 0.5% wallet impact
-        self.profit_protection_threshold = 2.0 * self.leverage  # 50% position P&L = 2.0% wallet impact  
-        self.loss_reversal_threshold = -10.0  # FIXED: -10.0% position P&L = -1.0% wallet impact
-        
-        # REMOVED: All cooldown references
+        # Risk thresholds for 25x leverage
+        self.profit_lock_threshold = 12.5       # 12.5% position P&L = 0.5% wallet impact
+        self.profit_protection_threshold = 50.0 # 50% position P&L = 2.0% wallet impact
     
     def _load_config(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -36,30 +33,16 @@ class RiskManager:
     def get_actual_risk_per_trade(self, balance):
         """Calculate actual risk percentage per trade"""
         position_value = balance * self.max_position_size
-        max_loss_with_leverage = position_value * self.stop_loss_pct * self.leverage
+        max_loss_with_leverage = position_value * self.stop_loss_pct
         return (max_loss_with_leverage / balance) * 100
     
-    def calculate_wallet_pnl_from_position_pnl(self, position_pnl_pct, wallet_balance, entry_price):
-        """FIXED: Convert position P&L% to wallet P&L%"""
-        # Position size in USDT
-        position_value = wallet_balance * self.max_position_size
-        # Absolute P&L in USDT
-        absolute_pnl = position_value * (position_pnl_pct / 100)
-        # Wallet P&L percentage  
-        wallet_pnl_pct = (absolute_pnl / wallet_balance) * 100
-        return wallet_pnl_pct
-    
     def should_activate_profit_lock(self, position_pnl_pct):
-        """FIXED: Activate profit lock at 12.5% position P&L (0.5% wallet impact)"""
+        """Activate profit lock at 12.5% position P&L"""
         return position_pnl_pct >= self.profit_lock_threshold
     
     def should_take_profit_protection(self, position_pnl_pct):
-        """FIXED: Close at 50% position P&L (2.0% wallet impact)"""
+        """Close at 50% position P&L"""
         return position_pnl_pct >= self.profit_protection_threshold
-    
-    def should_reverse_for_loss(self, position_pnl_pct):
-        """FIXED: Reverse at -10% position P&L (-1.0% wallet impact)"""
-        return position_pnl_pct <= self.loss_reversal_threshold
     
     def get_stop_loss(self, entry_price, side='long'):
         """Calculate stop loss price"""
@@ -78,13 +61,11 @@ class RiskManager:
             return "PROFIT_PROTECTION"
         elif position_pnl_pct >= self.profit_lock_threshold:
             return "PROFIT_LOCK"  
-        elif position_pnl_pct <= self.loss_reversal_threshold:
-            return "LOSS_REVERSAL"
         else:
             return "NORMAL"
     
     def get_risk_summary(self, balance):
-        """Get risk summary for display - FIXED"""
+        """Get risk summary for display"""
         position_value = balance * self.max_position_size
         max_loss = position_value * self.stop_loss_pct
         risk_pct = self.get_actual_risk_per_trade(balance)
@@ -95,10 +76,8 @@ class RiskManager:
             'position_value': position_value,
             'max_loss_usd': max_loss,
             'risk_per_trade_pct': risk_pct,
-            'profit_lock_threshold': self.profit_lock_threshold,  # Position P&L%
-            'profit_protection_threshold': self.profit_protection_threshold,  # Position P&L%
-            'loss_reversal_threshold': self.loss_reversal_threshold,  # Position P&L%
-            'wallet_profit_lock': self.profit_lock_threshold / self.leverage,  # Wallet impact
-            'wallet_profit_protection': self.profit_protection_threshold / self.leverage,  # Wallet impact
-            'wallet_loss_reversal': -1.0  # FIXED: Show -1.0% wallet impact for -10% position P&L
+            'profit_lock_threshold': self.profit_lock_threshold,
+            'profit_protection_threshold': self.profit_protection_threshold,
+            'wallet_profit_lock': self.profit_lock_threshold / self.leverage,
+            'wallet_profit_protection': self.profit_protection_threshold / self.leverage
         }
