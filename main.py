@@ -12,56 +12,46 @@ if project_root not in sys.path:
 
 from core.trade_engine import TradeEngine
 
-def display_info(engine, wallet_balance, current_price):
-    """Display simple trading info"""
-    risk_summary = engine.risk_manager.get_risk_summary(wallet_balance, current_price)
+def display_startup_info(engine, wallet_balance, current_price):
+    """Display streamlined startup info"""
+    mode = "Testnet" if engine.demo_mode else "🔴 LIVE"
+    symbol = engine.symbol.replace('/', '')
     
-    print(f"💰 Wallet Balance: ${wallet_balance:,.2f}")
-    print(f"📊 Symbol: {risk_summary['symbol']}")
-    print(f"💸 Fixed Risk: ${risk_summary['fixed_risk_usd']:.0f} per trade ({risk_summary['risk_pct']:.2f}% of wallet)")
-    print(f"🛑 Stop Loss: {risk_summary['stop_loss_pct']:.1f}%")
-    print(f"🎯 Take Profit: {risk_summary['take_profit_pct']:.1f}%")
-    print(f"📈 Risk/Reward: 1:{risk_summary['risk_reward_ratio']:.1f}")
-    print(f"🔒 Profit Lock: {engine.risk_manager.profit_lock_threshold}% position profit")
+    print(f"🚀 {symbol} Bot Started | {mode} Mode | Balance: ${wallet_balance:,.0f} | Risk: ${engine.risk_manager.fixed_risk_usd:.0f}/trade")
 
 async def main():
-    print("🤖 Simple Trading Bot - Fixed $100 Risk")
-    print("=" * 50)
-    
     engine = None
     try:
         engine = TradeEngine()
         
         if not engine.connect():
-            print("❌ Connection failed")
+            print("❌ Connection Failed | Check API credentials")
             return
         
-        # Get current data
+        # Get current data for startup display
         wallet_balance = engine.get_wallet_balance()
         ticker = engine.exchange.get_tickers(category="linear", symbol=engine.linear)
         current_price = float(ticker['result']['list'][0]['lastPrice']) if ticker.get('retCode') == 0 else 0.086
         
-        display_info(engine, wallet_balance, current_price)
+        display_startup_info(engine, wallet_balance, current_price)
         
-        # Trading mode
-        mode = "TESTNET" if engine.demo_mode else "🚨 LIVE"
-        print("=" * 50)
-        print(f"🚀 {mode} TRADING")
+        print("✅ All systems ready")
         print("=" * 50)
         
         await engine.notifier.bot_started(engine.symbol, wallet_balance)
         await engine.run()
         
     except KeyboardInterrupt:
-        print("\n⚠️ Shutdown by user")
+        print("\n🛑 Shutdown Initiated | Closing positions...")
         
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\n❌ Fatal Error | {e}")
         
     finally:
         if engine:
             try:
                 await engine.stop()
+                print("✅ Bot Stopped | All positions closed | Session complete")
             except:
                 pass
 
@@ -69,7 +59,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n👋 Done")
+        print("👋 Done")
     except Exception as e:
         print(f"❌ Fatal: {e}")
         sys.exit(1)

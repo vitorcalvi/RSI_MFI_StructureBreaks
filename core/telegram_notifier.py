@@ -37,8 +37,9 @@ class TelegramNotifier:
         self.position_start_time = datetime.now()
         direction = "📈 LONG" if side == "Buy" else "📉 SHORT"
         value = size * price
+        symbol_short = symbol.replace('/', '')
         
-        msg = (f"🔔 {direction} {symbol}\n"
+        msg = (f"{direction} {symbol_short}\n"
                f"💵 ${value:.0f} @ ${price:.2f}\n"
                f"💸 Risk: $100 fixed\n"
                f"⏰ {self.position_start_time:%H:%M:%S}")
@@ -58,16 +59,18 @@ class TelegramNotifier:
             self.position_start_time = None
 
         status = "✅ WIN" if pnl_usd > 0 else "❌ LOSS"
+        symbol_short = symbol.replace('/', '')
         
-        msg = (f"{status} {symbol}\n"
+        msg = (f"{status} {symbol_short}\n"
                f"💰 ${pnl_usd:+.2f}\n"
                f"🎯 {reason}\n"
                f"⏱️ {duration} | ⏰ {close_time:%H:%M:%S}")
         await self.send_message(msg)
 
     async def profit_lock_activated(self, symbol, pnl_pct, trailing_pct):
+        symbol_short = symbol.replace('/', '')
         msg = (f"🔒 PROFIT LOCK!\n"
-               f"📊 {symbol}\n"
+               f"📊 {symbol_short}\n"
                f"🎯 Trailing: {trailing_pct:.1f}%\n"
                f"⏰ {datetime.now():%H:%M:%S}")
         await self.send_message(msg)
@@ -77,8 +80,9 @@ class TelegramNotifier:
         await self.send_message(msg)
 
     async def bot_started(self, symbol, balance):
+        symbol_short = symbol.replace('/', '')
         msg = (f"🤖 BOT STARTED\n"
-               f"📊 {symbol}\n"
+               f"📊 {symbol_short}\n"
                f"💰 ${balance:.0f}\n"
                f"💸 Risk: $100/trade\n"
                f"⏰ {datetime.now():%H:%M:%S}")
