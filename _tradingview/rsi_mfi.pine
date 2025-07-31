@@ -2,7 +2,7 @@
 // © RanaAlgo
 
 //@version=5
-indicator("RSI Buy Sell Signals+ with MFI Cloud [RanaAlgo]", overlay=false, shorttitle="RSI++ MFI Cloud [RanaAlgo]", precision=2, max_labels_count=500)
+indicator("RSI Buy Sell Signals+ with MFI Cloud [RanaAlgo] - Updated", overlay=false, shorttitle="RSI++ MFI Cloud [Updated]", precision=2, max_labels_count=500)
 
 // ========== INPUT SETTINGS ==========
 // RSI Settings
@@ -12,12 +12,12 @@ overbought = input(55, title="Overbought Level", group="RSI Settings")
 src = input(close, title="Source", group="RSI Settings")
 
 // MFI Cloud Settings
-mfiLength = input(5, title="MFI Length", group="MFI Cloud Settings")
-fastMfiEma = input(5, title="Fast MFI EMA", group="MFI Cloud Settings")
-slowMfiEma = input(13, title="Slow MFI EMA", group="MFI Cloud Settings")
+mfiLength = input(3, title="MFI Length", group="MFI Cloud Settings")
+fastMfiEma = input(3, title="Fast MFI EMA", group="MFI Cloud Settings")
+slowMfiEma = input(8, title="Slow MFI EMA", group="MFI Cloud Settings")
 cloudOpacity = input.int(40, title="Cloud Opacity", minval=10, maxval=90, group="MFI Cloud Settings")
 
-// Signal Configuration - Fixed values
+// Signal Configuration
 requireVolume = false
 trendConfirmation = false
 minPeakStrength = 2
@@ -62,12 +62,11 @@ crossUnderBought = ta.crossunder(rsi, overbought)
 var string lastSignal = "None"
 var color lastSignalColor = color.gray
 
-// Enhanced Buy Signal
-buySignal = showSignals and ((isDip and volumeOk and trendOkBuy and (ta.change(rsi, 1) > 0 and (ta.change(rsi, 2) > 0))) or 
-           (not requireVolume and not trendConfirmation and crossOverSold))
+// Enhanced Buy Signal - BOTH RSI AND MFI must be oversold
+buySignal = showSignals and rsi < oversold and mfi < oversold and lastSignal != "BUY"
 
-// Enhanced Sell Signal
-sellSignal = showSignals and ((isPeak and volumeOk and trendOkSell and (ta.change(rsi, 1) < 0 and (ta.change(rsi, 2) < 0))) or             (not requireVolume and not trendConfirmation and crossUnderBought))
+// Enhanced Sell Signal - BOTH RSI AND MFI must be overbought  
+sellSignal = showSignals and rsi > overbought and mfi > overbought and lastSignal != "SELL"
 
 // Update last signal
 if buySignal
@@ -108,27 +107,32 @@ bgcolor(showZones and rsi >= overbought ? color.new(#FF5252, 90) : na, title="Ov
 bgcolor(showZones and rsi <= oversold ? color.new(#00C853, 90) : na, title="Oversold Zone")
 
 // ========== ALERTS ==========
-alertcondition(buySignal, title="Buy Signal Alert", message="RSI Buy Signal at {{close}}")
-alertcondition(sellSignal, title="Sell Signal Alert", message="RSI Sell Signal at {{close}}")
+alertcondition(buySignal, title="Buy Signal Alert", message="RSI/MFI Both Oversold - Buy Signal at {{close}}")
+alertcondition(sellSignal, title="Sell Signal Alert", message="RSI/MFI Both Overbought - Sell Signal at {{close}}")
 
 // ========== INFO PANEL ==========
-var table infoTable = table.new(position.top_right, 2, 5, border_width=1, bgcolor=color.new(#2D3436, 90))
+var table infoTable = table.new(position.top_right, 2, 6, border_width=1, bgcolor=color.new(#2D3436, 90))
 
 if barstate.islast
     table.cell(infoTable, 0, 0, "RSI Value", text_color=color.gray)
     table.cell(infoTable, 1, 0, str.tostring(rsi, "#.00"), 
               text_color=rsi >= overbought ? color.red : rsi <= oversold ? color.green : color.white)
     
-    table.cell(infoTable, 0, 1, "MFI Trend", text_color=color.gray)
-    table.cell(infoTable, 1, 1, bullishCloud ? "Bullish" : bearishCloud ? "Bearish" : "Neutral",
+    table.cell(infoTable, 0, 1, "MFI Value", text_color=color.gray)
+    table.cell(infoTable, 1, 1, str.tostring(mfi, "#.00"), 
+              text_color=mfi >= overbought ? color.red : mfi <= oversold ? color.green : color.white)
+    
+    table.cell(infoTable, 0, 2, "MFI Trend", text_color=color.gray)
+    table.cell(infoTable, 1, 2, bullishCloud ? "Bullish" : bearishCloud ? "Bearish" : "Neutral",
               text_color=bullishCloud ? color.green : bearishCloud ? color.red : color.gray)
     
-    table.cell(infoTable, 0, 2, "Status", text_color=color.gray)
-    table.cell(infoTable, 1, 2, rsi >= overbought ? "Overbought" : rsi <= oversold ? "Oversold" : "Neutral",
-              text_color=rsi >= overbought ? color.red : rsi <= oversold ? color.green : color.white)
+    table.cell(infoTable, 0, 3, "Status", text_color=color.gray)
+    table.cell(infoTable, 1, 3, rsi >= overbought and mfi >= overbought ? "Overbought" : rsi <= oversold and mfi <= oversold ? "Oversold" : "Neutral",
+              text_color=rsi >= overbought and mfi >= overbought ? color.red : rsi <= oversold and mfi <= oversold ? color.green : color.white)
     
-    table.cell(infoTable, 0, 3, "Last Signal", text_color=color.gray)
-    table.cell(infoTable, 1, 3, lastSignal, text_color=lastSignalColor)
+    table.cell(infoTable, 0, 4, "Last Signal", text_color=color.gray)
+    table.cell(infoTable, 1, 4, lastSignal, text_color=lastSignalColor)
     
-    table.cell(infoTable, 0, 4, "Momentum", text_color=color.gray)
-    table.cell(infoTable, 1, 4, ta.change(rsi, 1) > 0 ? "Rising" : "Falling",text_color=ta.change(rsi, 1) > 0 ? color.green : color.red)
+    table.cell(infoTable, 0, 5, "Both Confirm", text_color=color.gray)
+    table.cell(infoTable, 1, 5, (rsi < oversold and mfi < oversold) ? "BUY READY" : (rsi > overbought and mfi > overbought) ? "SELL READY" : "WAIT",
+              text_color=(rsi < oversold and mfi < oversold) ? color.green : (rsi > overbought and mfi > overbought) ? color.red : color.gray)

@@ -1,23 +1,14 @@
 {
   "rsi_length": 5,
-  "mfi_length": 5,
-  "oversold_level": 40,
-  "overbought_level": 50,
-  "structure_lookback": 20,
-  "structure_buffer_pct": 0.2,
-
-  "_comment_break_retest": "Break & Retest Pattern Configuration",
-  "retest_monitoring_bars": 15,
-  "retest_zone_pct": 2.0,
-  "retest_tolerance_pct": 0.2,
-  "min_retest_strength": 0.6,
-  "max_break_history": 3,
-
-  "_comment_confidence": "Pattern Confidence Thresholds",
-  "volume_ratio_ideal_min": 0.5,
-  "volume_ratio_ideal_max": 0.8,
-  "pullback_depth_ideal_min": 0.5,
-  "pullback_depth_ideal_max": 0.8,
-  "retest_bars_ideal_min": 5,
-  "retest_bars_ideal_max": 10
+  "mfi_length": 3,
+  "oversold": 45,
+  "overbought": 55,
+  "structure_lookback": 120,
+  "structure_buffer_pct": 0.3,
+  "fixed_risk_pct": 0.02,
+  "trailing_stop_pct": 0.01,
+  "profit_lock_threshold": 4.0,
+  "reward_ratio": 5.0,
+  "entry_fee_pct": 0.00055,
+  "exit_fee_pct": 0.00055
 }
