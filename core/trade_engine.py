@@ -19,6 +19,7 @@ class TradeEngine:
         print("✅ Risk management initialized")
         print("✅ RSI/MFI strategy loaded")
         print("🆕 Structure break monitoring enabled")
+        print("🎯 Break & Retest pattern detection active")
         
         self.notifier = TelegramNotifier()
         
@@ -45,7 +46,11 @@ class TradeEngine:
         self.pending_order = None
         
         # Structure break settings
-        self.enable_position_flipping = True  # Set to False to only close on breaks
+        self.enable_position_flipping = True
+        
+        # Break & Retest enhancement
+        self.retest_position_multiplier = 1.5  # 1.5x position size for retest patterns
+        self.last_retest_signal = None
         
         # Error tracking
         self._last_market_data_error = None
@@ -112,7 +117,6 @@ class TradeEngine:
             return df.sort_index()
             
         except Exception as e:
-            # Only print error occasionally to avoid spam
             now = datetime.now()
             if (self._last_market_data_error is None or 
                 (now - self._last_market_data_error).seconds > 30):
@@ -169,7 +173,6 @@ class TradeEngine:
             return self.position
             
         except Exception as e:
-            # Only print error occasionally to avoid spam
             now = datetime.now()
             if (self._last_position_error is None or 
                 (now - self._last_position_error).seconds > 30):
@@ -221,9 +224,7 @@ class TradeEngine:
         return f"{price:.{decimals}f}"
 
     async def check_structure_breaks(self, df, current_price):
-        """
-        NEW: Check for structure breaks during active positions
-        """
+        """Check for structure breaks during active positions"""
         if not self.position or not self.entry_price:
             return None
         
@@ -250,10 +251,10 @@ class TradeEngine:
                 flip_signal = {
                     'action': flip_action,
                     'price': current_price,
-                    'rsi': 50.0,  # Neutral values since this is structure-based
+                    'rsi': 50.0,
                     'mfi': 50.0,
                     'timestamp': df.index[-1] if len(df) > 0 else datetime.now(),
-                    'structure_stop': None,  # Will be calculated in open_position
+                    'structure_stop': None,
                     'signal_type': 'STRUCTURE_FLIP'
                 }
                 
@@ -319,107 +320,141 @@ class TradeEngine:
         except Exception as e:
             print(f"\n⚠️ SL/TP Warning | Trailing Error | {e}")
 
+    def calculate_enhanced_position_size(self, signal, wallet_balance, entry_price, structure_stop):
+        """Calculate position size with Break & Retest enhancement"""
+        # Base position size calculation
+        base_position_size = self.risk_manager.calculate_position_size(
+            wallet_balance, entry_price, structure_stop)
+        
+        # Apply Break & Retest multiplier for higher probability trades
+        if signal.get('signal_type') == 'BREAK_RETEST':
+            retest_strength = signal.get('retest_strength', 0.6)
+            
+            # Higher strength = higher multiplier (1.2x to 1.8x)
+            strength_multiplier = 1.0 + (retest_strength * 0.8)  # 1.0 to 1.8x
+            enhanced_size = base_position_size * strength_multiplier
+            
+            # Safety cap: never more than 2x base size
+            enhanced_size = min(enhanced_size, base_position_size * 2.0)
+            
+            print(f"🎯 ENHANCED SIZE | Retest Strength: {retest_strength:.1%} | Multiplier: {strength_multiplier:.1f}x")
+            return enhanced_size
+        
+        return base_position_size
+
     async def open_position(self, signal):
-            """Open position with structure-based stops"""
-            try:
-                # Close existing position first
-                if self.position:
-                    print(f"\n🔄 Force Close | Clearing position for new signal")
-                    await self.close_position("Force Close")
-                    await asyncio.sleep(2)
-                    
-                    self.check_position()
-                    if self.position:
-                        print(f"❌ Force Close Failed | Manual intervention required")
-                        return False
+        """Enhanced position opening with Break & Retest support"""
+        try:
+            # Close existing position first
+            if self.position:
+                print(f"\n🔄 Force Close | Clearing position for new signal")
+                await self.close_position("Force Close")
+                await asyncio.sleep(2)
                 
-                wallet_balance = self.get_wallet_balance()
-                current_price = signal['price']
-                structure_stop = signal.get('structure_stop')  # Get structure stop from signal
-                
-                # For structure flip signals, calculate structure stop
-                if signal.get('signal_type') == 'STRUCTURE_FLIP':
-                    # Get market data to calculate structure stop
-                    df = self.get_market_data()
-                    if df is not None:
-                        structure_stop = self.strategy.get_structure_stop(df, signal['action'], current_price)
-                
-                # Calculate position size with structure stop
-                position_size = self.risk_manager.calculate_position_size(
-                    wallet_balance, current_price, structure_stop)
-                
-                info = self.get_symbol_info()
-                if not info:
-                    return False
-                
-                qty = self.format_qty(info, position_size)
-                side = "Buy" if signal['action'] == 'BUY' else "Sell"
-                
-                # Calculate risk values for display with structure stops
-                side_type = 'long' if signal['action'] == 'BUY' else 'short'
-                sl_price = self.risk_manager.get_stop_loss_price(
-                    current_price, side_type, structure_stop)
-                tp_price = self.risk_manager.get_take_profit_price(
-                    current_price, side_type, structure_stop)
-                
-                # Calculate actual risk amounts
-                actual_risk = float(qty) * abs(current_price - sl_price)
-                actual_reward = float(qty) * abs(tp_price - current_price)
-                actual_rr = actual_reward / actual_risk if actual_risk > 0 else 4.0
-                
-                # Store for display
-                signal_type_display = signal.get('signal_type', 'RSI_MFI')
-                self.pending_order = {
-                    'action': signal['action'],
-                    'qty': qty,
-                    'price': current_price,
-                    'sl_price': sl_price,
-                    'tp_price': tp_price,
-                    'risk_amount': actual_risk,
-                    'reward_amount': actual_reward,
-                    'rr_ratio': actual_rr,
-                    'structure_based': structure_stop is not None,
-                    'structure_stop': structure_stop,
-                    'signal_type': signal_type_display
-                }
-                
-                # Place order
-                order = self.exchange.place_order(
-                    category="linear",
-                    symbol=self.linear,
-                    side=side,
-                    orderType="Market",
-                    qty=qty
-                )
-                
-                if order.get('retCode') != 0:
-                    print(f"\n❌ Order Failed | {order.get('retMsg')} | Retry in 5s")
-                    self.pending_order = None
-                    return False
-                
-                # Set stop loss and take profit with structure stops
-                await self._set_stop_and_tp(signal, current_price, info, structure_stop)
-                
-                # Set initial position state
-                self.profit_lock_active = False
-                self.entry_price = current_price
-                self.position_side = side.lower()
-                self.position_start_time = datetime.now()
-                
-                # Wait for position to be detected
-                await asyncio.sleep(1)
                 self.check_position()
+                if self.position:
+                    print(f"❌ Force Close Failed | Manual intervention required")
+                    return False
+            
+            wallet_balance = self.get_wallet_balance()
+            current_price = signal['price']
+            structure_stop = signal.get('structure_stop')
+            
+            # For structure flip signals, calculate structure stop
+            if signal.get('signal_type') == 'STRUCTURE_FLIP':
+                df = self.get_market_data()
+                if df is not None:
+                    structure_stop = self.strategy.get_structure_stop(df, signal['action'], current_price)
+            
+            # Enhanced position sizing for Break & Retest patterns
+            position_size = self.calculate_enhanced_position_size(
+                signal, wallet_balance, current_price, structure_stop)
+            
+            info = self.get_symbol_info()
+            if not info:
+                return False
+            
+            qty = self.format_qty(info, position_size)
+            side = "Buy" if signal['action'] == 'BUY' else "Sell"
+            
+            # Calculate risk values for display
+            side_type = 'long' if signal['action'] == 'BUY' else 'short'
+            sl_price = self.risk_manager.get_stop_loss_price(
+                current_price, side_type, structure_stop)
+            tp_price = self.risk_manager.get_take_profit_price(
+                current_price, side_type, structure_stop)
+            
+            # Calculate actual risk amounts
+            actual_risk = float(qty) * abs(current_price - sl_price)
+            actual_reward = float(qty) * abs(tp_price - current_price)
+            actual_rr = actual_reward / actual_risk if actual_risk > 0 else 4.0
+            
+            # Enhanced display for Break & Retest patterns
+            signal_type_display = signal.get('signal_type', 'RSI_MFI')
+            if signal_type_display == 'BREAK_RETEST':
+                pattern_type = signal.get('pattern_type', 'retest')
+                retest_strength = signal.get('retest_strength', 0.6)
+                break_level = signal.get('break_level', current_price)
                 
-                await self.notifier.trade_opened(self.symbol, current_price, float(qty), side)
-                return True
-                
-            except Exception as e:
-                print(f"\n❌ Order Failed | {e} | Retry in 5s")
+                print(f"\n🎯 BREAK & RETEST ENTRY | {pattern_type.upper()} | Strength: {retest_strength:.1%} | Level: ${break_level:.2f}")
+            
+            # Store for display
+            self.pending_order = {
+                'action': signal['action'],
+                'qty': qty,
+                'price': current_price,
+                'sl_price': sl_price,
+                'tp_price': tp_price,
+                'risk_amount': actual_risk,
+                'reward_amount': actual_reward,
+                'rr_ratio': actual_rr,
+                'structure_based': structure_stop is not None,
+                'structure_stop': structure_stop,
+                'signal_type': signal_type_display,
+                'enhanced_size': signal.get('signal_type') == 'BREAK_RETEST'
+            }
+            
+            # Place order
+            order = self.exchange.place_order(
+                category="linear",
+                symbol=self.linear,
+                side=side,
+                orderType="Market",
+                qty=qty
+            )
+            
+            if order.get('retCode') != 0:
+                print(f"\n❌ Order Failed | {order.get('retMsg')} | Retry in 5s")
                 self.pending_order = None
                 return False
+            
+            # Set stop loss and take profit
+            await self._set_stop_and_tp(signal, current_price, info, structure_stop)
+            
+            # Set initial position state
+            self.profit_lock_active = False
+            self.entry_price = current_price
+            self.position_side = side.lower()
+            self.position_start_time = datetime.now()
+            
+            # Store retest signal for reference
+            if signal.get('signal_type') == 'BREAK_RETEST':
+                self.last_retest_signal = signal
+            
+            # Wait for position to be detected
+            await asyncio.sleep(1)
+            self.check_position()
+            
+            await self.notifier.trade_opened(self.symbol, current_price, float(qty), side)
+            return True
+            
+        except Exception as e:
+            print(f"\n❌ Order Failed | {e} | Retry in 5s")
+            self.pending_order = None
+            return False
 
     async def _set_stop_and_tp(self, signal, current_price, info, structure_stop=None):
-        """Set stop loss and take profit with structure stops"""
+        """Set stop loss and take profit"""
         try:
             side = 'long' if signal['action'] == 'BUY' else 'short'
             
@@ -427,6 +462,19 @@ class TradeEngine:
                 current_price, side, structure_stop)
             tp_price = self.risk_manager.get_take_profit_price(
                 current_price, side, structure_stop)
+            
+            # For Break & Retest patterns, extend take profit targets
+            if signal.get('signal_type') == 'BREAK_RETEST':
+                # 1.5x normal target for confirmed retests
+                risk_distance = abs(current_price - sl_price)
+                extended_reward = risk_distance * 6  # 6:1 instead of 4:1
+                
+                if side == 'long':
+                    tp_price = current_price + extended_reward
+                else:
+                    tp_price = current_price - extended_reward
+                
+                print(f"🎯 Extended Target | 6:1 R:R for Break & Retest | TP: ${tp_price:.2f}")
             
             # Set both SL and TP
             stop_resp = self.exchange.set_trading_stop(
@@ -446,7 +494,7 @@ class TradeEngine:
             print(f"\n⚠️ SL/TP Warning | Error: {e} | Manual monitoring required")
     
     async def close_position(self, reason="Signal"):
-        """Close position with new format"""
+        """Close position"""
         try:
             if not self.position:
                 return False
@@ -478,12 +526,19 @@ class TradeEngine:
             pnl = self.position.get('unrealized_pnl', 0)
             result = "Win" if pnl > 0 else "Loss"
             
-            print(f"\n📉 CLOSED | {reason} | ⏱️ Duration: {duration} | PnL: {pnl:+.2f} | {result}")
+            # Enhanced close message for Break & Retest trades
+            close_msg = f"\n📉 CLOSED | {reason} | ⏱️ Duration: {duration} | PnL: {pnl:+.2f} | {result}"
+            if self.last_retest_signal:
+                retest_strength = self.last_retest_signal.get('retest_strength', 0.6)
+                close_msg += f" | Retest: {retest_strength:.1%}"
+            
+            print(close_msg)
             
             await self.notifier.trade_closed(self.symbol, 0, pnl, reason)
             
             # Clear all position state
             self._clear_position()
+            self.last_retest_signal = None
             
             return True
             
@@ -492,10 +547,23 @@ class TradeEngine:
             return False
 
     async def handle_signal(self, signal):
-        """Handle trading signals with consolidated display"""
+        """Enhanced signal handling with Break & Retest priority"""
         if not signal:
             return
         
+        # Break & Retest signals have highest priority
+        if signal.get('signal_type') == 'BREAK_RETEST':
+            print(f"\n🎯 HIGH PRIORITY | Break & Retest Pattern Detected")
+            
+            # Close any existing position for high-probability retest
+            if self.position:
+                await self.close_position("Retest Priority")
+                await asyncio.sleep(1)
+            
+            await self.open_position(signal)
+            return
+        
+        # Existing signal logic for RSI/MFI and structure flips
         if self.position:
             # Close on opposite signal
             current_side = self.position['side']
@@ -522,15 +590,14 @@ class TradeEngine:
             # Get current price
             current_price = df['close'].iloc[-1]
             
-            # NEW: Check for structure breaks FIRST during active positions
+            # Check for structure breaks during active positions
             if self.position:
                 structure_break = await self.check_structure_breaks(df, current_price)
                 if structure_break:
-                    # Structure break handled, skip normal signal processing
                     self._display_status(df, current_price)
                     return
             
-            # Get normal RSI/MFI signal
+            # Get signal (now includes Break & Retest detection)
             signal = self.strategy.generate_signal(df)
             
             # Risk management
@@ -541,11 +608,10 @@ class TradeEngine:
             # Display status
             self._display_status(df, current_price)
             
-            # Handle signals
+            # Handle signals with priority system
             await self.handle_signal(signal)
                 
         except Exception as e:
-            # Only print connection errors occasionally to avoid spam
             now = datetime.now()
             if (self._last_cycle_error is None or 
                 (now - self._last_cycle_error).seconds > 30):
@@ -553,7 +619,7 @@ class TradeEngine:
                 self._last_cycle_error = now
 
     def _display_status(self, df, current_price):
-        """Display consolidated status format with structure stop info"""
+        """Enhanced status display with Break & Retest info"""
         # Get indicators
         df_with_indicators = self.strategy.calculate_indicators(df)
         current_rsi = df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators.columns else 50.0
@@ -562,21 +628,41 @@ class TradeEngine:
         timestamp = datetime.now().strftime('%H:%M:%S')
         symbol_short = self.symbol.replace('/', '')
         
+        # Add retest monitoring status
+        retest_status = ""
+        if self.strategy.retest_monitoring:
+            break_type = self.strategy.retest_monitoring['break_record']['type']
+            break_level = self.strategy.retest_monitoring['break_record']['level']
+            retest_status = f" | 🔍 Monitoring {break_type} @ ${break_level:.2f}"
+        
         if self.pending_order:
-            # Position just opened - show full opening info (3 lines)
+            # Enhanced opening info for Break & Retest
             direction_emoji = "📈" if self.pending_order['action'] == 'BUY' else "📉"
             signal_type = self.pending_order.get('signal_type', 'RSI_MFI')
-            signal_emoji = "🎯" if signal_type == 'RSI_MFI' else "⚡"
             
-            # Line 1: Opening info with signal type
-            opening_line = f"[{timestamp}] {symbol_short} | RSI: {current_rsi:.1f} | MFI: {current_mfi:.1f} | {direction_emoji} {signal_emoji} {self.pending_order['action']} {self.pending_order['qty']} @ ${self.pending_order['price']:.2f}"
+            if signal_type == 'BREAK_RETEST':
+                signal_emoji = "🎯"
+                pattern_info = " (RETEST)"
+            elif signal_type == 'STRUCTURE_FLIP':
+                signal_emoji = "⚡"
+                pattern_info = " (FLIP)"
+            else:
+                signal_emoji = "🎯"
+                pattern_info = ""
+            
+            # Line 1: Opening info
+            opening_line = f"[{timestamp}] {symbol_short} | RSI: {current_rsi:.1f} | MFI: {current_mfi:.1f} | {direction_emoji} {signal_emoji} {self.pending_order['action']}{pattern_info} {self.pending_order['qty']} @ ${self.pending_order['price']:.2f}"
             print(f"\n{opening_line}")
             
-            # Line 2: Risk details with structure stop info
+            # Line 2: Risk details
             stop_type = "Structure" if self.pending_order.get('structure_based') else "Fixed"
             stop_distance_pct = abs(self.pending_order['price'] - self.pending_order['sl_price']) / self.pending_order['price'] * 100
             
-            risk_line = (f"💰 Risk: ${self.pending_order['risk_amount']:.0f} | "
+            size_info = ""
+            if self.pending_order.get('enhanced_size'):
+                size_info = " (Enhanced) "
+            
+            risk_line = (f"💰 Risk: ${self.pending_order['risk_amount']:.0f}{size_info}| "
                         f"SL: ${self.pending_order['sl_price']:.2f} ({stop_type} {stop_distance_pct:.1f}%) | "
                         f"TP: ${self.pending_order['tp_price']:.2f} (+${self.pending_order['reward_amount']:.0f}) | "
                         f"R:R 1:{self.pending_order['rr_ratio']:.1f}")
@@ -586,7 +672,7 @@ class TradeEngine:
             self.pending_order = None
             
         elif self.position:
-            # Position monitoring - only update the timer line
+            # Position monitoring
             if self.position_start_time:
                 duration = datetime.now() - self.position_start_time
                 hours, remainder = divmod(int(duration.total_seconds()), 3600)
@@ -598,13 +684,18 @@ class TradeEngine:
             pnl = self.position['unrealized_pnl']
             lock_status = ' 🔒' if self.profit_lock_active else ''
             
-            # Line 3: Position monitoring (updates every second)
-            monitor_line = f"⏱️ {duration_str} | ${current_price:.2f} | PnL: {pnl:+.2f}{lock_status}"
+            # Add retest info if applicable
+            retest_info = ""
+            if self.last_retest_signal:
+                strength = self.last_retest_signal.get('retest_strength', 0.6)
+                retest_info = f" | 🎯 {strength:.1%}"
+            
+            monitor_line = f"⏱️ {duration_str} | ${current_price:.2f} | PnL: {pnl:+.2f}{lock_status}{retest_info}"
             print(f"\r{monitor_line}", end='', flush=True)
             
         else:
-            # No position - market status (updates every second)
-            status = f"[{timestamp}] {symbol_short} | RSI: {current_rsi:.1f} | MFI: {current_mfi:.1f} | No Position"
+            # No position - market status with retest monitoring
+            status = f"[{timestamp}] {symbol_short} | RSI: {current_rsi:.1f} | MFI: {current_mfi:.1f} | No Position{retest_status}"
             print(f"\r{status}", end='', flush=True)
     
     async def run(self):
