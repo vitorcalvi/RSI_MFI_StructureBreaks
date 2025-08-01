@@ -13,3 +13,4 @@
 2025-08-01T06:52:49Z  id=3  action=ENTRY  side=SELL  price=3681.91  size=2.92  strat=RSI_MFI_Overbought
 2025-08-01T06:53:07Z  id=3  action=EXIT  trigger=max_hold_time_exceeded  price=3683.21  pnl=-4.18  hold_s=16.5  final=true
 2025-08-01T06:53:08Z  id=3  action=EXIT  trigger=position_closed  price=3683.21  pnl=-4.18  hold_s=17.9  final=true
+2025-08-01T07:05:30Z  id=1  action=ENTRY  side=SELL  price=3686.62  size=2.91  strat=RSI_MFI_Overbought
