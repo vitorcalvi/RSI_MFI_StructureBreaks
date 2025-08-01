@@ -20,7 +20,7 @@ class AutoTester:
         return bt.run_backtest()
     
     def test_all_configs(self):
-        config_dir = Path('strategies/bot_param_scenarios')
+        config_dir = Path('strategies/bot_param_scenarios_1000')
         config_files = list(config_dir.glob('*.json'))
         
         print(f"Testing {len(config_files)} configurations from {config_dir}...")
