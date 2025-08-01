@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Instagram Content Creator</title>
+    <style>
+      #canvas {
+        border: 1px solid #ccc;
+      }
+      #content {
+        width: 400px;
+        height: 400px;
+        background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 24px;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="content">
+      <div>
+        <h2>Your Post Content</h2>
+        <p>Edit this text!</p>
+      </div>
+    </div>
+
+    <textarea id="caption" placeholder="Write your caption..."></textarea>
+    <button onclick="shareToInstagram()">Share to Instagram</button>
+
+    <script>
+      function shareToInstagram() {
+        html2canvas(document.getElementById('content')).then(canvas => {
+          canvas.toBlob(blob => {
+            const file = new File([blob], 'instagram-post.png', {
+              type: 'image/png'
+            });
+
+            if (navigator.share) {
+              navigator.share({
+                files: [file],
+                title: 'Instagram Post',
+                text: document.getElementById('caption').value
+              });
+            } else {
+              // Fallback: download image
+              const url = canvas.toDataURL();
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = 'instagram-post.png';
+              a.click();
+            }
+          });
+        });
+      }
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  </body>
+</html>

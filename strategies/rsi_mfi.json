@@ -11,7 +11,7 @@
   "trailing_stop_pct": 0.002,
   "entry_fee_pct": 0.00055,
   "exit_fee_pct": 0.00055,
-  "max_position_time": 75,
+  "max_position_time": 150,
   "cooldown_seconds": 20,
   "emergency_stop_pct": 0.006,
   "min_profit_distance": 0.001,

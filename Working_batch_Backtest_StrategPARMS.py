@@ -3,12 +3,14 @@ import json
 import os
 import pandas as pd
 import numpy as np
+import argparse
 from pathlib import Path
 from datetime import datetime
 
 class AutoTester:
-    def __init__(self, data_path):
+    def __init__(self, data_path, custom_fees=None):
         self.data_path = data_path
+        self.custom_fees = custom_fees
         self.results = []
         
     def load_config(self, config_path):
@@ -16,6 +18,12 @@ class AutoTester:
             return json.load(f)
     
     def run_backtest(self, params):
+        # Override fees if custom fees specified
+        if self.custom_fees is not None:
+            params = params.copy()
+            params['entry_fee_pct'] = self.custom_fees
+            params['exit_fee_pct'] = self.custom_fees
+        
         bt = EthHFTBacktester(self.data_path, params)
         return bt.run_backtest()
     
@@ -23,7 +31,8 @@ class AutoTester:
         config_dir = Path('strategies/bot_param_scenarios_1000')
         config_files = list(config_dir.glob('*.json'))
         
-        print(f"Testing {len(config_files)} configurations from {config_dir}...")
+        fee_msg = f" (using custom fees: {self.custom_fees*100:.3f}%)" if self.custom_fees else ""
+        print(f"Testing {len(config_files)} configurations from {config_dir}{fee_msg}...")
         
         for config_file in config_files:
             try:
@@ -285,19 +294,24 @@ class EthHFTBacktester:
         }
 
 if __name__ == '__main__':
-    # Update this path to your data file
-    DATA_PATH = '_data/ETHUSDT_1_7d_20250731_071705.csv'
+    parser = argparse.ArgumentParser(description='Automated Config Tester for Trading Strategies')
+    parser.add_argument('--data', '-d', default='_data/ETHUSDT_1_7d_20250731_071705.csv',
+                       help='Path to data file (default: _data/ETHUSDT_1_7d_20250731_071705.csv)')
+    parser.add_argument('--fee', '-f', type=float, default=None,
+                       help='Override fees for all configs (e.g., --fee 0.0055 for 0.55%%)')
+    
+    args = parser.parse_args()
     
     # Check if config directory exists
     if not os.path.exists('strategies/bot_param_scenarios'):
         print("❌ Config directory not found: strategies/bot_param_scenarios")
         exit(1)
     
-    if not os.path.exists(DATA_PATH):
-        print(f"❌ Data file not found: {DATA_PATH}")
-        print("Please update DATA_PATH in the script")
+    if not os.path.exists(args.data):
+        print(f"❌ Data file not found: {args.data}")
+        print("Use --data to specify correct path")
         exit(1)
     
-    tester = AutoTester(DATA_PATH)
+    tester = AutoTester(args.data, args.fee)
     tester.test_all_configs()
     tester.generate_report()
