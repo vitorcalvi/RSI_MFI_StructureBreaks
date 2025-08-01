@@ -11,9 +11,13 @@ class TelegramNotifier:
         self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
         self.enabled = bool(self.bot_token and self.chat_id)
         
-        print("✅ Telegram notifications enabled" if self.enabled else "⚠️  Telegram notifications disabled (missing credentials)")
+        if self.enabled:
+            print("✅ Telegram notifications enabled")
+        else:
+            print("⚠️ Telegram notifications disabled (missing credentials)")
     
     async def send_message(self, message):
+        """Send raw message to Telegram"""
         if not self.enabled:
             return False
         
@@ -33,35 +37,57 @@ class TelegramNotifier:
             print(f"❌ Telegram send error: {e}")
             return False
     
-    async def send_trade_signal(self, signal, price, quantity):
+    async def send_trade_entry(self, signal_data, price, quantity, strategy_info):
+        """Send trade entry notification"""
         try:
-            emoji = "🟢" if signal['action'] == 'BUY' else "🔴"
-            direction = "LONG" if signal['action'] == 'BUY' else "SHORT"
+            emoji = "🟢" if signal_data['action'] == 'BUY' else "🔴"
+            direction = "LONG" if signal_data['action'] == 'BUY' else "SHORT"
             
             message = f"""
-{emoji} <b>TRADE SIGNAL - {direction}</b>
+{emoji} <b>TRADE ENTRY - {direction}</b>
 
 📊 <b>Symbol:</b> ETHUSDT
 💰 <b>Price:</b> ${price:.2f}
 📈 <b>Quantity:</b> {quantity}
-🛑 <b>Stop Loss:</b> ${signal['structure_stop']:.2f}
+🛑 <b>Stop Loss:</b> ${signal_data['structure_stop']:.2f}
 
-📋 <b>Strategy:</b> {signal['signal_type']}
+📋 <b>Strategy:</b> {signal_data['signal_type']}
+📊 <b>RSI:</b> {signal_data['rsi']:.1f} | <b>MFI:</b> {signal_data['mfi']:.1f}
+📏 <b>Structure Level:</b> ${signal_data['level']:.2f}
+
+⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
 """
-            
-            if 'rsi' in signal and 'mfi' in signal:
-                message += f"📊 <b>RSI:</b> {signal['rsi']} | <b>MFI:</b> {signal['mfi']}\n"
-            
-            if 'level' in signal:
-                message += f"📏 <b>Structure Level:</b> ${signal['level']:.2f}\n"
-            
-            message += f"\n⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}"
             
             await self.send_message(message)
         except Exception as e:
-            print(f"❌ Trade signal notification error: {e}")
+            print(f"❌ Trade entry notification error: {e}")
     
-    async def send_position_update(self, position_data):
+    async def send_trade_exit(self, exit_data, price, pnl, duration, strategy_info):
+        """Send trade exit notification"""
+        try:
+            emoji = "🟢" if pnl >= 0 else "🔴"
+            pnl_text = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+            
+            message = f"""
+{emoji} <b>TRADE EXIT</b>
+
+📊 <b>Symbol:</b> ETHUSDT
+💰 <b>Exit Price:</b> ${price:.2f}
+💵 <b>PnL:</b> {pnl_text}
+⏱️ <b>Duration:</b> {duration:.1f}s
+
+🔄 <b>Trigger:</b> {exit_data['trigger'].replace('_', ' ').title()}
+📊 <b>RSI:</b> {exit_data.get('rsi', 0):.1f} | <b>MFI:</b> {exit_data.get('mfi', 0):.1f}
+
+⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
+"""
+            
+            await self.send_message(message)
+        except Exception as e:
+            print(f"❌ Trade exit notification error: {e}")
+    
+    async def send_position_update(self, position_data, current_price, strategy_info):
+        """Send position update notification"""
         try:
             side = position_data.get('side', 'Unknown')
             size = position_data.get('size', '0')
@@ -79,6 +105,7 @@ class TelegramNotifier:
 📈 <b>Side:</b> {side}
 💰 <b>Size:</b> {size}
 💵 <b>Entry:</b> ${entry_price:.2f}
+💰 <b>Current:</b> ${current_price:.2f}
 📊 <b>PnL:</b> ${unrealized_pnl:.2f} ({pnl_pct:+.2f}%)
 
 ⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
@@ -88,47 +115,40 @@ class TelegramNotifier:
         except Exception as e:
             print(f"❌ Position update notification error: {e}")
     
-    async def send_position_closed(self, final_pnl=None):
+    async def send_bot_status(self, status, message_text=""):
+        """Send bot status notification"""
         try:
+            status_emoji = {
+                'started': '🚀',
+                'stopped': '🛑',
+                'error': '❌',
+                'warning': '⚠️'
+            }
+            
+            emoji = status_emoji.get(status, '📊')
+            
             message = f"""
-🏁 <b>POSITION CLOSED</b>
+{emoji} <b>BOT STATUS: {status.upper()}</b>
 
 📊 <b>Symbol:</b> ETHUSDT
-"""
-            
-            if final_pnl is not None:
-                emoji = "✅" if final_pnl >= 0 else "❌"
-                message += f"{emoji} <b>Final PnL:</b> ${final_pnl:.2f}\n"
-            
-            message += f"\n⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}"
-            
-            await self.send_message(message)
-        except Exception as e:
-            print(f"❌ Position closed notification error: {e}")
-    
-    async def send_profit_lock(self, new_stop, current_pnl):
-        try:
-            message = f"""
-🔒 <b>PROFIT LOCK ACTIVATED</b>
-
-📊 <b>Symbol:</b> ETHUSDT
-🛑 <b>New Stop:</b> ${new_stop:.2f}
-💰 <b>Current PnL:</b> ${current_pnl:.2f}
+📋 <b>Strategy:</b> RSI/MFI Strategy
+{f"💬 <b>Message:</b> {message_text}" if message_text else ""}
 
 ⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
 """
             
             await self.send_message(message)
         except Exception as e:
-            print(f"❌ Profit lock notification error: {e}")
+            print(f"❌ Bot status notification error: {e}")
     
     async def send_error_alert(self, error_type, error_message):
+        """Send error alert notification"""
         try:
             message = f"""
-⚠️ <b>BOT ERROR ALERT</b>
+❌ <b>ERROR ALERT</b>
 
-🔧 <b>Type:</b> {error_type}
-📝 <b>Message:</b> {error_message}
+🚨 <b>Type:</b> {error_type}
+💬 <b>Message:</b> {error_message}
 
 ⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
 """
@@ -137,72 +157,18 @@ class TelegramNotifier:
         except Exception as e:
             print(f"❌ Error alert notification error: {e}")
     
-    async def send_bot_status(self, status, additional_info=None):
+    async def send_balance_update(self, balance, symbol="ETHUSDT"):
+        """Send balance update notification"""
         try:
-            status_emoji = {
-                'started': '🚀',
-                'stopped': '🛑',
-                'connected': '✅',
-                'disconnected': '❌',
-                'error': '⚠️'
-            }
-            
-            emoji = status_emoji.get(status.lower(), '📊')
-            
             message = f"""
-{emoji} <b>BOT STATUS: {status.upper()}</b>
+💰 <b>BALANCE UPDATE</b>
 
-📊 <b>Symbol:</b> ETHUSDT
-🔄 <b>Strategy:</b> RSI + MFI + Break & Retest
-"""
-            
-            if additional_info:
-                message += f"📝 <b>Info:</b> {additional_info}\n"
-            
-            message += f"\n⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}"
-            
-            await self.send_message(message)
-        except Exception as e:
-            print(f"❌ Bot status notification error: {e}")
-    
-    async def send_daily_summary(self, trades_count, total_pnl, win_rate):
-        try:
-            emoji = "📈" if total_pnl >= 0 else "📉"
-            
-            message = f"""
-{emoji} <b>DAILY TRADING SUMMARY</b>
+📊 <b>Symbol:</b> {symbol}
+💵 <b>Balance:</b> ${balance:,.2f}
 
-📊 <b>Symbol:</b> ETHUSDT
-🔢 <b>Total Trades:</b> {trades_count}
-💰 <b>Total PnL:</b> ${total_pnl:.2f}
-🎯 <b>Win Rate:</b> {win_rate:.1f}%
-
-📅 <b>Date:</b> {datetime.now().strftime('%Y-%m-%d')}
+⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
 """
             
             await self.send_message(message)
         except Exception as e:
-            print(f"❌ Daily summary notification error: {e}")
-    
-    def test_connection(self):
-        if not self.enabled:
-            print("❌ Telegram not configured")
-            return False
-        
-        try:
-            response = requests.post(
-                f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-                json={
-                    'chat_id': self.chat_id,
-                    'text': '✅ Telegram bot connection test successful!',
-                    'parse_mode': 'HTML'
-                },
-                timeout=10
-            )
-            
-            success = response.status_code == 200
-            print("✅ Telegram connection test successful" if success else f"❌ Telegram test failed: {response.status_code}")
-            return success
-        except Exception as e:
-            print(f"❌ Telegram test error: {e}")
-            return False
+            print(f"❌ Balance update notification error: {e}")
