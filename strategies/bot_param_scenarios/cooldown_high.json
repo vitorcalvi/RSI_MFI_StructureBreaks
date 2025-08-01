@@ -12,7 +12,7 @@
   "entry_fee_pct": 0.00025,
   "exit_fee_pct": 0.00025,
   "max_position_time": 60,
-  "cooldown_seconds": 5,
+  "cooldown_seconds": 30,
   "emergency_stop_pct": 0.005,
   "min_profit_distance": 0.0015
 }
