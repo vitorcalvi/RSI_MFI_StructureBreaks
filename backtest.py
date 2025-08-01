@@ -1,208 +1,127 @@
-# eth_hft_backtester_tuner.py (profitable‑export ready)
 """
-ETH HFT back‑tester + tuner
-===========================
+Optuna + Ray hyper‑parameter optimizer for RSIMFICloudStrategy
+============================================================
 
-Adds **profitable‑scenario export**:
+This script uses **Ray Tune** with **OptunaSearch** to distribute trials across all CPU cores
+on Apple‑Silicon (M2). It writes the best parameter set to `best_params.json`.
 
-* `DirectoryTuner.run(save_dir=...)` will copy every evaluated JSON file whose
-  `return_pct` > 0 to `save_dir/` and finally zip them to
-  `<save_dir>.zip`.
-* CLI flag `--jsondir DIR --saveprof OUTDIR` activates this behaviour from the
-  command line.
+Prerequisites (tested on macOS 14, Apple M2):
+  brew install python  # or ensure you have Python ≥3.10 (universal build)
+  python -m pip install --upgrade ray[tune] optuna pandas numpy
+  # your back‑tester / data requirements
 
-Example
--------
-```bash
-python3 backtest.py data/eth.csv \
-       --jsondir strategies/bot_param_scenarios \
-       --saveprof strategies/profitable_scenarios
-```
-This leaves you with `profitable_scenarios.zip` containing only the profitable
-param sets.
+Run:
+  python optimizer.py --trials 500 --output best_params.json  
 """
-
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import random
-import shutil
-import zipfile
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict
 
 import numpy as np
-import pandas as pd
+import ray
+from ray import tune
+from ray.tune.search.optuna import OptunaSearch
 
 # ---------------------------------------------------------------------------
-# Strategy back‑tester (same as patched version)
+# 🔧  USER CONFIG SECTION – adjust to your environment
 # ---------------------------------------------------------------------------
 
-class EthHFTBacktester:
-    MIN_RISK_DIST_PCT = 1e-4
-
-    def __init__(self, data_path: str, params: Dict[str, float], *, initial_balance: float = 10_000.0):
-        self.data_path = data_path
-        self.initial_balance = initial_balance
-        self.params = params.copy()
-        self.timeframe = "1min"
-        self.data: pd.DataFrame | None = None
-        self.trades: List[Dict] = []
-        self.balance = initial_balance
-        self.equity_curve: List[Tuple[pd.Timestamp, float]] = []
-
-    def _load_data(self):
-        df = pd.read_csv(self.data_path, parse_dates=["timestamp"], index_col="timestamp")
-        df = (
-            df.resample(self.timeframe)
-            .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
-            .dropna()
-        )
-        self.data = df
-
-    def _compute_indicators(self):
-        p = self.params
-        close = self.data["close"]
-        delta = close.diff()
-        gain = delta.clip(lower=0)
-        loss = (-delta).clip(lower=0)
-        avg_gain = gain.ewm(alpha=1 / p["rsi_length"], adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1 / p["rsi_length"], adjust=False).mean()
-        rs = avg_gain / avg_loss.replace(0, np.nan)
-        self.data["rsi"] = 100 - 100 / (1 + rs)
-        tp = (self.data["high"] + self.data["low"] + close) / 3
-        mf = tp * self.data["volume"]
-        sign = tp.diff()
-        pos_mf = mf.where(sign > 0, 0)
-        neg_mf = mf.where(sign <= 0, 0)
-        pos_ema = pos_mf.ewm(alpha=1 / p["mfi_length"], adjust=False).mean()
-        neg_ema = neg_mf.ewm(alpha=1 / p["mfi_length"], adjust=False).mean()
-        mf_ratio = pos_ema / neg_ema.replace(0, np.nan)
-        self.data["mfi"] = 100 - 100 / (1 + mf_ratio)
-        self.data[["rsi", "mfi"]] = self.data[["rsi", "mfi"]].fillna(50)
-
-    def run(self):
-        self._load_data()
-        self._compute_indicators()
-        self.trades.clear(); self.balance = self.initial_balance
-        self.equity_curve = [(self.data.index[0], self.initial_balance)]
-        pos = None; p = self.params
-        for ts, row in self.data.iterrows():
-            price = row["close"]
-            if pos is None:
-                candidate = None
-                if row["rsi"] < p["oversold"] and row["mfi"] < p["oversold"]:
-                    candidate = self._open("BUY", price, ts)
-                elif row["rsi"] > p["overbought"] and row["mfi"] > p["overbought"]:
-                    candidate = self._open("SELL", price, ts)
-                if candidate:
-                    pos = candidate
-                continue
-            if self._manage(pos, price, ts):
-                pos = None
-        if pos is not None:
-            self._close(pos, self.data["close"].iloc[-1], self.data.index[-1], "EOD")
-        return {
-            "return_pct": (self.balance / self.initial_balance - 1) * 100,
-            "max_drawdown_pct": self._max_drawdown_pct(),
-        }
-
-    # --- helpers (same logic as earlier)…
-    def _open(self, side, price, ts):
-        p = self.params
-        risk_amt = self.balance * p["fixed_risk_pct"]
-        window = self.data.loc[:ts].iloc[-p["structure_lookback"] :]
-        stop = window["low"].min() - price * p["structure_buffer_pct"] if side == "BUY" else window["high"].max() + price * p["structure_buffer_pct"]
-        risk_dist = abs(price - stop)
-        if risk_dist <= price * self.MIN_RISK_DIST_PCT:
-            return None
-        size = risk_amt / risk_dist
-        if not np.isfinite(size) or size <= 0:
-            return None
-        tp = price + risk_dist * p["reward_ratio"] if side == "BUY" else price - risk_dist * p["reward_ratio"]
-        self.balance -= price * size * p["entry_fee_pct"]
-        return {"side": side, "entry": price, "stop": stop, "tp": tp, "size": size}
-
-    def _manage(self, pos, price, ts):
-        p = self.params
-        pnl_pct = ((price - pos["entry"]) / pos["entry"] * 100) if pos["side"] == "BUY" else ((pos["entry"] - price) / pos["entry"] * 100)
-        if (pos["side"] == "BUY" and price <= pos["stop"]) or (pos["side"] == "SELL" and price >= pos["stop"]):
-            self._close(pos, price, ts, "SL"); return True
-        if (pos["side"] == "BUY" and price >= pos["tp"]) or (pos["side"] == "SELL" and price <= pos["tp"]):
-            self._close(pos, price, ts, "TP"); return True
-        if pnl_pct >= p["profit_lock_threshold"]:
-            new_stop = price * (1 - p["trailing_stop_pct"]) if pos["side"] == "BUY" else price * (1 + p["trailing_stop_pct"])
-            pos["stop"] = max(pos["stop"], new_stop) if pos["side"] == "BUY" else min(pos["stop"], new_stop)
-        return False
-
-    def _close(self, pos, price, ts, reason):
-        p = self.params
-        pnl = (price - pos["entry"]) * pos["size"] if pos["side"] == "BUY" else (pos["entry"] - price) * pos["size"]
-        pnl -= price * pos["size"] * p["exit_fee_pct"]
-        self.balance += pnl
-        self.trades.append({"pnl": pnl, "close_ts": ts, "reason": reason})
-        self.equity_curve.append((ts, self.balance))
-
-    def _max_drawdown_pct(self):
-        eq = np.array([x[1] for x in self.equity_curve])
-        if eq.size == 0: return 0.0
-        peak = np.maximum.accumulate(eq)
-        return np.min((eq - peak) / peak) * 100
+DATA_PATH = Path("/path/to/your/ohlcv.parquet")  # update!
+STARTING_BALANCE = 10_000.0
 
 # ---------------------------------------------------------------------------
-# Search utilities (PARAM_SPACE & RandomSearchTuner unchanged)
-# ---------------------------------------------------------------------------
 
-PARAM_SPACE: Dict[str, Tuple[float, float, str]] = {
-    "rsi_length": (3, 30, "int"),
-    "mfi_length": (3, 30, "int"),
-    "oversold": (20, 45, "int"),
-    "overbought": (55, 80, "int"),
-    "structure_lookback": (20, 180, "int"),
-    "structure_buffer_pct": (0.0, 0.3, "float"),
-    "fixed_risk_pct": (0.005, 0.02, "float"),
-    "trailing_stop_pct": (0.0, 0.02, "float"),
-    "profit_lock_threshold": (0.5, 4.0, "float"),
-    "reward_ratio": (0.5, 10.0, "float"),
-    "entry_fee_pct": (0.0001, 0.001, "float"),
-    "exit_fee_pct": (0.0001, 0.001, "float"),
-}
 
-# RandomSearchTuner identical to previous revision ... (omitted for brevity)
+def evaluate_strategy(config: Dict[str, Any]) -> Dict[str, float]:
+    """Stub – replace with your actual back‑test & PnL calculation.
 
-class DirectoryTuner:
-    def __init__(self, data_path: str, json_dir: str):
-        self.data_path = data_path
-        self.json_dir = Path(json_dir)
+    Args:
+        config: Hyper‑parameters for RSIMFICloudStrategy
 
-    def run(self, save_dir: str | None = None):
-        best = None
-        profitable: List[Tuple[str, Dict]] = []
-        for jf in self.json_dir.glob("*.json"):
-            params = json.load(open(jf))
-            perf = EthHFTBacktester(self.data_path, params).run()
-            score = perf["return_pct"] + perf["max_drawdown_pct"]
-            print(f"{jf.name:<25}  Ret={perf['return_pct']:>+6.2f}%  DD={perf['max_drawdown_pct']:>+6.2f}%")
-            if perf["return_pct"] > 0:
-                profitable.append((jf.name, params))
-            if best is None or score > best["score"]:
-                best = {"file": jf.name, "params": params, **perf, "score": score}
-        if save_dir and profitable:
-            out_dir = Path(save_dir)
-            out_dir.mkdir(parents=True, exist_ok=True)
-            for name, params in profitable:
-                shutil.copy(self.json_dir / name, out_dir / name)
-            zip_path = out_dir.with_suffix(".zip")
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for f in out_dir.glob("*.json"):
-                    zf.write(f, arcname=f.name)
-            print(f"\nSaved {len(profitable)} profitable JSONs to {out_dir} and zipped to {zip_path}")
-        return best
+    Returns:
+        dict with objective value: *Higher* is better.  Use total return, Sharpe, etc.
+    """
+    # TODO: implement your back‑test – for demo we return random.
+    # >>> replace this with something like: run_backtest(prices, config)
+    result = float(np.random.normal(loc=0.02, scale=0.01))
+    return {"objective": result}
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
-if __name__ == "
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Ray Tune + Optuna optimizer for RSIMFICloudStrategy")
+    parser.add_argument("--trials", type=int, default=500, help="Number of trials to run")
+    parser.add_argument("--output", type=Path, default=Path("best_params.json"), help="Where to store best params")
+    parser.add_argument("--storage", type=str, default="sqlite:///optuna_study.db", help="Optuna storage URL")
+    parser.add_argument("--study-name", type=str, default="rsi_mfi_optimizer", help="Study name")
+
+    args = parser.parse_args()
+
+    # Initialize Ray
+    if not ray.is_initialized():
+        ray.init()
+
+    # Define search space
+    config = {
+        # Core lengths
+        "rsi_length": tune.choice([8, 10, 12, 14, 16, 18, 20]),
+        "mfi_length": tune.randint(5, 16),
+        # Thresholds
+        "oversold": tune.choice([20, 25, 30, 35]),
+        "overbought": tune.choice([65, 70, 75, 80]),
+        # Structure
+        "structure_lookback": tune.choice([100, 120, 150, 200]),
+        "structure_buffer_pct": tune.uniform(0.15, 0.3),
+        # Risk / reward
+        "fixed_risk_pct": tune.uniform(0.008, 0.015),
+        "reward_ratio": tune.uniform(1.8, 2.5),
+        "profit_lock_threshold": tune.uniform(1.2, 1.8),
+        "trailing_stop_pct": tune.uniform(0.0015, 0.003),
+        # Fees / misc (kept constant or narrow band)
+        "entry_fee_pct": 0.00025,
+        "exit_fee_pct": 0.00025,
+        "max_position_time": tune.choice([45, 60, 75, 90, 105, 120]),
+        "cooldown_seconds": tune.choice([5, 10, 15, 20, 25, 30]),
+        "emergency_stop_pct": tune.uniform(0.005, 0.007),
+        "min_profit_distance": tune.uniform(0.001, 0.002),
+    }
+
+    # Create OptunaSearch algorithm
+    search_alg = OptunaSearch(
+        metric="objective",
+        mode="max",
+        seed=42
+    )
+
+    # Run optimization
+    tuner = tune.Tuner(
+        evaluate_strategy,
+        tune_config=tune.TuneConfig(
+            search_alg=search_alg,
+            num_samples=args.trials,
+        ),
+        param_space=config,
+    )
+
+    results = tuner.fit()
+
+    # Get best result
+    best_result = results.get_best_result(metric="objective", mode="max")
+    
+    print("\nBest value:", best_result.metrics["objective"])
+    print("Best params:")
+    for k, v in best_result.config.items():
+        print(f"  {k}: {v}")
+
+    # Dump to json
+    with open(args.output, "w") as f:
+        json.dump(best_result.config, f, indent=2)
+    print(f"\n✅ Best params saved to {args.output}\n")
+
+    ray.shutdown()
+
+
+if __name__ == "__main__":
+    main()

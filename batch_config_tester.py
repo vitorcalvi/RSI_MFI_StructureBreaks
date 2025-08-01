@@ -34,17 +34,17 @@ class AutoTester:
                     'config': config_file.name,
                     'return_pct': result['return_pct'],
                     'total_trades': result['total_trades'],
-                    'trades_per_hour': result['trades_per_hour'],
+                    'trades_per_minute': result['trades_per_minute'],
                     'status': 'SUCCESS'
                 })
-                print(f"✅ {config_file.name}: {result['return_pct']:.2f}% | {result['total_trades']} trades | {result['trades_per_hour']:.1f}/hr")
+                print(f"✅ {config_file.name}: {result['return_pct']:.2f}% | {result['total_trades']} trades | {result['trades_per_minute']:.3f}/min")
                 
             except Exception as e:
                 self.results.append({
                     'config': config_file.name,
                     'return_pct': 0.0,
                     'total_trades': 0,
-                    'trades_per_hour': 0.0,
+                    'trades_per_minute': 0.0,
                     'status': f'ERROR: {str(e)}'
                 })
                 print(f"❌ {config_file.name}: FAILED - {e}")
@@ -61,14 +61,14 @@ class AutoTester:
         print("\n" + "="*80)
         print("AUTOMATED TEST RESULTS")
         print("="*80)
-        print(f"{'STATUS':<2} {'CONFIG':<25} {'RETURN':<8} {'TRADES':<7} {'PER HOUR':<8}")
+        print(f"{'STATUS':<2} {'CONFIG':<25} {'RETURN':<8} {'TRADES':<7} {'PER MIN':<8}")
         print("-"*80)
         
         for _, row in df.iterrows():
             status = "✅" if row['status'] == 'SUCCESS' else "❌"
             return_str = f"{row['return_pct']:>7.2f}%" if np.isfinite(row['return_pct']) else "  ERROR"
             trades_str = f"{row['total_trades']:>6}" if 'total_trades' in row else "    0"
-            freq_str = f"{row['trades_per_hour']:>7.1f}" if 'trades_per_hour' in row else "    0.0"
+            freq_str = f"{row['trades_per_minute']:>7.3f}" if 'trades_per_minute' in row else "   0.000"
             print(f"{status} {row['config']:<25} {return_str} {trades_str} {freq_str}")
         
         print("="*80)
@@ -76,7 +76,25 @@ class AutoTester:
         if len(successful) > 0:
             best = successful.iloc[0]
             print(f"🏆 BEST CONFIG: {best['config']}")
-            print(f"   Return: {best['return_pct']:.2f}% | Trades: {best['total_trades']} | Frequency: {best['trades_per_hour']:.1f}/hr")
+            print(f"   Return: {best['return_pct']:.2f}% | Trades: {best['total_trades']} | Frequency: {best['trades_per_minute']:.3f}/min")
+        
+        # Top 5 by profitability
+        print("\n" + "="*50)
+        print("🏆 TOP 5 MOST PROFITABLE")
+        print("="*50)
+        top_profit = successful.head(5)
+        for i, (_, row) in enumerate(top_profit.iterrows(), 1):
+            print(f"{i}. {row['config']:<25} {row['return_pct']:>7.2f}%")
+        
+        # Top 5 by trade volume
+        print("\n" + "="*50) 
+        print("📊 TOP 5 MOST ACTIVE (Highest Trades)")
+        print("="*50)
+        top_trades = successful.nlargest(5, 'total_trades')
+        for i, (_, row) in enumerate(top_trades.iterrows(), 1):
+            freq_per_hour = row['trades_per_minute'] * 60
+            print(f"{i}. {row['config']:<25} {row['total_trades']:>4} trades ({freq_per_hour:.1f}/hr)")
+        
         print("="*80)
         
         # Save results
@@ -247,23 +265,23 @@ class EthHFTBacktester:
     
     def evaluate(self):
         if not self.trades:
-            return {'return_pct': 0.0, 'total_trades': 0, 'trades_per_hour': 0.0}
+            return {'return_pct': 0.0, 'total_trades': 0, 'trades_per_minute': 0.0}
         
         df = pd.DataFrame(self.trades)
         total_pnl = df['pnl'].sum()
         
         # Handle NaN/infinite results
         if not np.isfinite(total_pnl):
-            return {'return_pct': 0.0, 'total_trades': len(df), 'trades_per_hour': 0.0}
+            return {'return_pct': 0.0, 'total_trades': len(df), 'trades_per_minute': 0.0}
         
-        # Calculate trading frequency
-        time_span_hours = (self.data.index[-1] - self.data.index[0]).total_seconds() / 3600
-        trades_per_hour = len(df) / time_span_hours if time_span_hours > 0 else 0
+        # Calculate trading frequency per minute
+        time_span_minutes = (self.data.index[-1] - self.data.index[0]).total_seconds() / 60
+        trades_per_minute = len(df) / time_span_minutes if time_span_minutes > 0 else 0
         
         return {
             'return_pct': total_pnl / self.initial_balance * 100,
             'total_trades': len(df),
-            'trades_per_hour': trades_per_hour
+            'trades_per_minute': trades_per_minute
         }
 
 if __name__ == '__main__':
