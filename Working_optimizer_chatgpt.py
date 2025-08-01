@@ -325,7 +325,7 @@ def evaluate_strategy(
 ) -> Dict[str, float]:
     """Load data and run backtest"""
     if data_path is None:
-        data_path = Path("./_data/ETHUSDT_1_7d_20250731_071705.csv")
+        data_path = Path("./_data/ADAUSDT_1_7d_20250731_071705.csv")
     try:
         data = load_data(data_path)
     except FileNotFoundError:
@@ -380,7 +380,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Resolve and validate data path early
-    data_path = Path(args.data if args.data else "./_data/ETHUSDT_1_7d_20250731_071705.csv").expanduser().resolve()
+    data_path = Path(args.data if args.data else "./_data/ADAUSDT_1_7d_20250731_071705.csv").expanduser().resolve()
     if not data_path.is_file():
         print(f"Error: data file '{data_path}' does not exist. Aborting.")
         return

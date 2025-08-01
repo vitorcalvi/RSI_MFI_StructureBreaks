@@ -19,7 +19,7 @@ class TradeEngine:
         self.notifier = TelegramNotifier()
         
         # Trading configuration
-        self.symbol = "ETHUSDT"
+        self.symbol = "ADAUSDT"
         self.demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
         
         # API credentials
@@ -378,7 +378,7 @@ class TradeEngine:
             os.system('cls' if os.name == 'nt' else 'clear')
             
             print("=" * 60)
-            print("⚡ ETHUSDT HIGH-FREQUENCY SCALPING BOT")
+            print("⚡ ADAUSDT HIGH-FREQUENCY SCALPING BOT")
             print("=" * 60)
             print(f"⏰ {time} | 💰 ${price:.2f}")
             

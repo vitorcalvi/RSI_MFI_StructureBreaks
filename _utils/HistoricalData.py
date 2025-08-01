@@ -149,7 +149,7 @@ def main():
         epilog="""
 Examples:
   python3 getHistorical.py -s BTCUSDT -i 60 -t 7d
-  python3 getHistorical.py -s ETHUSDT -i D -t 30d
+  python3 getHistorical.py -s ADAUSDT -i D -t 30d
   python3 getHistorical.py -s ADAUSDT -i 15 -t 24h
 
 Intervals: 1,3,5,15,30,60,120,240,360,720,D,W,M (minutes or D/W/M)

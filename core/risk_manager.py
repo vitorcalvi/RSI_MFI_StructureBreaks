@@ -6,7 +6,7 @@ class RiskManager:
     def __init__(self, config_file="strategies/rsi_mfi.json"):
         self.config_file = config_file
         self.config = self.load_config()
-        self.symbol = "ETHUSDT"
+        self.symbol = "ADAUSDT"
         
         print("⚡ Risk Manager initialized")
         print(f"💰 Risk per trade: {self.config['fixed_risk_pct']*100}%")

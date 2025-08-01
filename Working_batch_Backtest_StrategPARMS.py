@@ -295,8 +295,8 @@ class EthHFTBacktester:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Automated Config Tester for Trading Strategies')
-    parser.add_argument('--data', '-d', default='_data/ETHUSDT_1_7d_20250731_071705.csv',
-                       help='Path to data file (default: _data/ETHUSDT_1_7d_20250731_071705.csv)')
+    parser.add_argument('--data', '-d', default='_data/ADAUSDT_1_7d_20250731_071705.csv',
+                       help='Path to data file (default: _data/ADAUSDT_1_7d_20250731_071705.csv)')
     parser.add_argument('--fee', '-f', type=float, default=None,
                        help='Override fees for all configs (e.g., --fee 0.0055 for 0.55%%)')
     

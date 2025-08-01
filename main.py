@@ -59,7 +59,7 @@ class HFScalpingBot:
             risk_config = self.engine.risk_manager.config
             
             print("⚡" * 60)
-            print("🚀 ETHUSDT HIGH-FREQUENCY SCALPING BOT")
+            print("🚀 ADAUSDT HIGH-FREQUENCY SCALPING BOT")
             print("⚡" * 60)
             print(f"📊 Strategy: {strategy_info['name']}")
             print(f"📈 RSI({strategy_info['config']['rsi_length']}) + MFI({strategy_info['config']['mfi_length']})")

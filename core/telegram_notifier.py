@@ -46,7 +46,7 @@ class TelegramNotifier:
             message = f"""
 {emoji} <b>TRADE ENTRY - {direction}</b>
 
-📊 <b>Symbol:</b> ETHUSDT
+📊 <b>Symbol:</b> ADAUSDT
 💰 <b>Price:</b> ${price:.2f}
 📈 <b>Quantity:</b> {quantity}
 🛑 <b>Stop Loss:</b> ${signal_data['structure_stop']:.2f}
@@ -71,7 +71,7 @@ class TelegramNotifier:
             message = f"""
 {emoji} <b>TRADE EXIT</b>
 
-📊 <b>Symbol:</b> ETHUSDT
+📊 <b>Symbol:</b> ADAUSDT
 💰 <b>Exit Price:</b> ${price:.2f}
 💵 <b>PnL:</b> {pnl_text}
 ⏱️ <b>Duration:</b> {duration:.1f}s
@@ -101,7 +101,7 @@ class TelegramNotifier:
             message = f"""
 {emoji} <b>POSITION UPDATE</b>
 
-📊 <b>Symbol:</b> ETHUSDT
+📊 <b>Symbol:</b> ADAUSDT
 📈 <b>Side:</b> {side}
 💰 <b>Size:</b> {size}
 💵 <b>Entry:</b> ${entry_price:.2f}
@@ -130,7 +130,7 @@ class TelegramNotifier:
             message = f"""
 {emoji} <b>BOT STATUS: {status.upper()}</b>
 
-📊 <b>Symbol:</b> ETHUSDT
+📊 <b>Symbol:</b> ADAUSDT
 📋 <b>Strategy:</b> RSI/MFI Strategy
 {f"💬 <b>Message:</b> {message_text}" if message_text else ""}
 
@@ -157,7 +157,7 @@ class TelegramNotifier:
         except Exception as e:
             print(f"❌ Error alert notification error: {e}")
     
-    async def send_balance_update(self, balance, symbol="ETHUSDT"):
+    async def send_balance_update(self, balance, symbol="ADAUSDT"):
         """Send balance update notification"""
         try:
             message = f"""
