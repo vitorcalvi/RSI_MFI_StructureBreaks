@@ -20,6 +20,7 @@ class TradeEngine:
         self.symbol = "ETHUSDT"
         self.demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
         
+        # API credentials
         if self.demo_mode:
             self.api_key = os.getenv('TESTNET_BYBIT_API_KEY')
             self.api_secret = os.getenv('TESTNET_BYBIT_API_SECRET')
@@ -27,35 +28,17 @@ class TradeEngine:
             self.api_key = os.getenv('LIVE_BYBIT_API_KEY')
             self.api_secret = os.getenv('LIVE_BYBIT_API_SECRET')
         
+        # State variables
         self.exchange = None
         self.position = None
         self.position_start_time = None
         self.price_data = pd.DataFrame()
-        
-    def __init__(self):
-        self.risk_manager = RiskManager()
-        self.strategy = RSIMFICloudStrategy(self.risk_manager)
-        self.notifier = TelegramNotifier()
-        
-        self.symbol = "ETHUSDT"
-        self.demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
-        
-        if self.demo_mode:
-            self.api_key = os.getenv('TESTNET_BYBIT_API_KEY')
-            self.api_secret = os.getenv('TESTNET_BYBIT_API_SECRET')
-        else:
-            self.api_key = os.getenv('LIVE_BYBIT_API_KEY')
-            self.api_secret = os.getenv('LIVE_BYBIT_API_SECRET')
-        
-        self.exchange = None
-        self.position = None
-        self.position_start_time = None
-        self.price_data = pd.DataFrame()
-        
-        os.makedirs("logs", exist_ok=True)
-        self.log_file = "logs/trades.log"
         self.trade_id = 0
         self.current_signal = None
+        
+        # Setup logging
+        os.makedirs("logs", exist_ok=True)
+        self.log_file = "logs/trades.log"
         
         print(f"⚡ HF Trade engine initialized - {self.symbol}")
     
@@ -67,33 +50,21 @@ class TradeEngine:
                 api_secret=self.api_secret
             )
             
-            if self.exchange.get_server_time().get('retCode') == 0:
-                mode = "Testnet" if self.demo_mode else "Live"
-                print(f"✅ Connected to Bybit {mode}")
+            # Test connection
+            info = self.exchange.get_server_time()
+            if info.get('retCode') == 0:
+                print(f"✅ Connected to Bybit {'testnet' if self.demo_mode else 'mainnet'}")
                 return True
+            
+            print(f"❌ Connection failed: {info.get('retMsg')}")
             return False
         except Exception as e:
-            print(f"❌ Connection Error: {e}")
+            print(f"❌ Connection error: {e}")
             return False
     
     def format_quantity(self, qty):
-        if qty <= 0:
-            return "0"
-        
         try:
-            instruments = self.exchange.get_instruments_info(category="linear", symbol=self.symbol)
-            if instruments.get('retCode') != 0:
-                return f"{qty:.3f}"
-            
-            lot_filter = instruments['result']['list'][0].get('lotSizeFilter', {})
-            qty_step = float(lot_filter.get('qtyStep', '0.001'))
-            min_qty = float(lot_filter.get('minOrderQty', '0.001'))
-            
-            qty = round(qty / qty_step) * qty_step
-            
-            if qty < min_qty:
-                return "0"
-            
+            qty_step = "0.001"  # ETH precision
             decimals = len(str(qty_step).split('.')[-1]) if '.' in str(qty_step) else 0
             return f"{qty:.{decimals}f}" if decimals > 0 else str(int(qty))
         except:
@@ -109,20 +80,34 @@ class TradeEngine:
                 qty = kwargs.get('quantity', '')
                 side = signal.get('action', '')
                 strategy = signal.get('signal_type', '')
+                rsi = signal.get('rsi', 0)
+                mfi = signal.get('mfi', 0)
+                structure_stop = signal.get('structure_stop', 0)
+                level = signal.get('level', 0)
+                param_hash = kwargs.get('param_hash', '7e3d21a')
                 
-                log_line = f"{timestamp}  id={self.trade_id}  action=ENTRY  side={side}  price={price:.2f}  size={qty}  strat={strategy}"
-            
+                log_line = (f"{timestamp}  id={self.trade_id}  action=ENTRY  side={side}  "
+                           f"price={price:.2f}  size={qty}  strat={strategy}  rsi={rsi:.1f}  "
+                           f"mfi={mfi:.1f}  structure_stop={structure_stop:.2f}  level={level:.2f}  "
+                           f"param_hash={param_hash}  hold_s=0.0   pnl=0.00")
+                
             elif action == "EXIT":
                 duration = (datetime.now() - self.position_start_time).total_seconds() if self.position_start_time else 0
-                reason = kwargs.get('reason', '').lower().replace(' ', '_')
+                trigger = kwargs.get('reason', '').lower().replace(' ', '_')
                 pnl = kwargs.get('pnl', 0)
+                final = kwargs.get('final', 'true')
+                param_hash = kwargs.get('param_hash', '7e3d21a')
+                rsi = kwargs.get('rsi', 0)
+                mfi = kwargs.get('mfi', 0)
                 
-                log_line = f"{timestamp}  id={self.trade_id}  action=EXIT  trigger={reason}  price={price:.2f}  pnl={pnl:.2f}  hold_s={duration:.1f}  final=true"
+                log_line = (f"{timestamp}  id={self.trade_id}  action=EXIT   trigger={trigger}  "
+                           f"price={price:.2f}  pnl={pnl:.2f}  hold_s={duration:.1f}  final={final}  "
+                           f"param_hash={param_hash}  rsi={rsi:.1f}  mfi={mfi:.1f}")
             
             with open(self.log_file, "a") as f:
                 f.write(log_line + "\n")
-        except:
-            pass
+        except Exception as e:
+            print(f"Logging error: {e}")
     
     async def run_cycle(self):
         try:
@@ -131,10 +116,11 @@ class TradeEngine:
             
             await self.check_position_status()
             
+            # Check max hold time
             if self.position and self.position_start_time:
                 age = (datetime.now() - self.position_start_time).total_seconds()
                 if age > self.risk_manager.config['max_position_time']:
-                    await self.close_position("Max hold time exceeded")
+                    await self.close_position("max_hold_time_exceeded")
                     return
             
             signal = self.strategy.generate_signal(self.price_data)
@@ -199,16 +185,18 @@ class TradeEngine:
     async def execute_trade(self, signal):
         try:
             current_price = float(self.price_data['close'].iloc[-1])
-            
             balance = await self.get_account_balance()
+            
             if not balance:
                 return
             
+            # Validate trade
             is_valid, reason = self.risk_manager.validate_trade(signal, balance, current_price)
             if not is_valid:
                 print(f"⚠️  Trade rejected: {reason}")
                 return
             
+            # Calculate position size
             qty = self.risk_manager.calculate_position_size(
                 balance=balance,
                 entry_price=current_price,
@@ -220,6 +208,7 @@ class TradeEngine:
                 print("⚠️  Position size too small")
                 return
             
+            # Place order
             order = self.exchange.place_order(
                 category="linear",
                 symbol=self.symbol,
@@ -231,7 +220,18 @@ class TradeEngine:
             
             if order.get('retCode') == 0:
                 self.current_signal = signal
-                self.log_trade("ENTRY", current_price, signal=signal, quantity=formatted_qty)
+                
+                # Get current indicators for logging
+                df = self.strategy.calculate_indicators(self.price_data)
+                current_rsi = df.get('rsi', pd.Series([0])).iloc[-1] if len(df.get('rsi', [])) > 0 else 0
+                current_mfi = df.get('mfi', pd.Series([0])).iloc[-1] if len(df.get('mfi', [])) > 0 else 0
+                
+                # Add indicators to signal for logging
+                signal_with_indicators = signal.copy()
+                signal_with_indicators['rsi'] = current_rsi
+                signal_with_indicators['mfi'] = current_mfi
+                
+                self.log_trade("ENTRY", current_price, signal=signal_with_indicators, quantity=formatted_qty)
                 await self.notifier.send_trade_signal(signal, current_price, formatted_qty)
                 print(f"⚡ {signal['action']} order placed - Qty: {formatted_qty}")
             else:
@@ -280,7 +280,13 @@ class TradeEngine:
             )
             
             if order.get('retCode') == 0:
-                self.log_trade("EXIT", current_price, reason=reason, pnl=pnl)
+                # Get current indicators for logging
+                df = self.strategy.calculate_indicators(self.price_data)
+                current_rsi = df.get('rsi', pd.Series([0])).iloc[-1] if len(df.get('rsi', [])) > 0 else 0
+                current_mfi = df.get('mfi', pd.Series([0])).iloc[-1] if len(df.get('mfi', [])) > 0 else 0
+                
+                self.log_trade("EXIT", current_price, reason=reason, pnl=pnl, 
+                             rsi=current_rsi, mfi=current_mfi, final=True)
                 print(f"⚡ Position closed - {reason}")
         except Exception as e:
             print(f"❌ Close error: {e}")
@@ -303,7 +309,14 @@ class TradeEngine:
             if self.position:
                 pnl = float(self.position.get('unrealisedPnl', 0))
                 price = float(self.price_data['close'].iloc[-1]) if len(self.price_data) > 0 else 0
-                self.log_trade("EXIT", price, reason="Position Closed", pnl=pnl)
+                
+                # Get current indicators
+                df = self.strategy.calculate_indicators(self.price_data)
+                current_rsi = df.get('rsi', pd.Series([0])).iloc[-1] if len(df.get('rsi', [])) > 0 else 0
+                current_mfi = df.get('mfi', pd.Series([0])).iloc[-1] if len(df.get('mfi', [])) > 0 else 0
+                
+                self.log_trade("EXIT", price, reason="position_closed", pnl=pnl,
+                             rsi=current_rsi, mfi=current_mfi, final=True)
             
             await self.notifier.send_position_closed()
             print("📝 Position closed")
