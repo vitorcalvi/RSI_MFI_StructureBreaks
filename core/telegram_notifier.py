@@ -1,129 +1,208 @@
 import os
+import requests
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class TelegramNotifier:
     def __init__(self):
-        self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-        self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
         self.enabled = bool(self.bot_token and self.chat_id)
-        self.position_start_time = None
-        self.bot = None
-
-        if not self.enabled:
-            print("ℹ️ Telegram notifications disabled")
-            return
-
-        try:
-            from telegram import Bot
-            self.bot = Bot(token=self.bot_token)
-            print("✅ Telegram notifications enabled")
-        except ImportError:
-            print("⚠️ python-telegram-bot not installed")
-            self.enabled = False
-        except Exception as e:
-            print(f"⚠️ Telegram init failed: {e}")
-            self.enabled = False
-
+        
+        print("✅ Telegram notifications enabled" if self.enabled else "⚠️  Telegram notifications disabled (missing credentials)")
+    
     async def send_message(self, message):
-        if not self.enabled or not self.bot:
-            print(f"📱 {message}")
-            return
+        if not self.enabled:
+            return False
+        
         try:
-            await self.bot.send_message(chat_id=self.chat_id, text=message)
+            response = requests.post(
+                f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+                json={
+                    'chat_id': self.chat_id,
+                    'text': message,
+                    'parse_mode': 'HTML',
+                    'disable_web_page_preview': True
+                },
+                timeout=10
+            )
+            return response.status_code == 200
         except Exception as e:
-            print(f"❌ Telegram error: {e}\n📱 {message}")
-
-    async def trade_opened(self, symbol, price, size, side):
+            print(f"❌ Telegram send error: {e}")
+            return False
+    
+    async def send_trade_signal(self, signal, price, quantity):
         try:
-            self.position_start_time = datetime.now()
-            direction = "📈 LONG" if side == "Buy" else "📉 SHORT"
+            emoji = "🟢" if signal['action'] == 'BUY' else "🔴"
+            direction = "LONG" if signal['action'] == 'BUY' else "SHORT"
             
-            # Safe value handling
-            price = float(price) if price is not None else 0.0
-            size = float(size) if size is not None else 0.0
-            value = size * price
-            
-            symbol_short = symbol.replace('/', '') if symbol else 'ETHUSDT'
-            
-            msg = (f"{direction} {symbol_short}\n"
-                   f"💵 ${value:.0f} @ ${price:.2f}\n"
-                   f"💸 Risk: $100 fixed\n"
-                   f"⏰ {self.position_start_time:%H:%M:%S}")
-            await self.send_message(msg)
-        except Exception as e:
-            print(f"⚠️ Trade opened notification error: {e}")
+            message = f"""
+{emoji} <b>TRADE SIGNAL - {direction}</b>
 
-    async def trade_closed(self, symbol, pnl_pct, pnl_usd, reason="Signal"):
+📊 <b>Symbol:</b> ETHUSDT
+💰 <b>Price:</b> ${price:.2f}
+📈 <b>Quantity:</b> {quantity}
+🛑 <b>Stop Loss:</b> ${signal['structure_stop']:.2f}
+
+📋 <b>Strategy:</b> {signal['signal_type']}
+"""
+            
+            if 'rsi' in signal and 'mfi' in signal:
+                message += f"📊 <b>RSI:</b> {signal['rsi']} | <b>MFI:</b> {signal['mfi']}\n"
+            
+            if 'level' in signal:
+                message += f"📏 <b>Structure Level:</b> ${signal['level']:.2f}\n"
+            
+            message += f"\n⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}"
+            
+            await self.send_message(message)
+        except Exception as e:
+            print(f"❌ Trade signal notification error: {e}")
+    
+    async def send_position_update(self, position_data):
         try:
-            close_time = datetime.now()
-            duration = "N/A"
+            side = position_data.get('side', 'Unknown')
+            size = position_data.get('size', '0')
+            entry_price = float(position_data.get('avgPrice', 0))
+            unrealized_pnl = float(position_data.get('unrealisedPnl', 0))
             
-            if self.position_start_time:
-                minutes = (close_time - self.position_start_time).total_seconds() / 60
-                if minutes < 60:
-                    duration = f"{int(minutes)}m"
-                else:
-                    hours, mins = int(minutes // 60), int(minutes % 60)
-                    duration = f"{hours}h {mins}m"
-                self.position_start_time = None
+            position_value = float(size) * entry_price
+            pnl_pct = (unrealized_pnl / position_value) * 100 if position_value > 0 else 0
+            emoji = "🟢" if unrealized_pnl >= 0 else "🔴"
+            
+            message = f"""
+{emoji} <b>POSITION UPDATE</b>
 
-            # Safe value handling
-            pnl_usd = float(pnl_usd) if pnl_usd is not None else 0.0
-            status = "✅ WIN" if pnl_usd > 0 else "❌ LOSS"
-            symbol_short = symbol.replace('/', '') if symbol else 'ETHUSDT'
+📊 <b>Symbol:</b> ETHUSDT
+📈 <b>Side:</b> {side}
+💰 <b>Size:</b> {size}
+💵 <b>Entry:</b> ${entry_price:.2f}
+📊 <b>PnL:</b> ${unrealized_pnl:.2f} ({pnl_pct:+.2f}%)
+
+⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
+"""
             
-            msg = (f"{status} {symbol_short}\n"
-                   f"💰 ${pnl_usd:+.2f}\n"
-                   f"🎯 {reason}\n"
-                   f"⏱️ {duration} | ⏰ {close_time:%H:%M:%S}")
-            await self.send_message(msg)
+            await self.send_message(message)
         except Exception as e:
-            print(f"⚠️ Trade closed notification error: {e}")
-
-    async def profit_lock_activated(self, symbol, pnl_pct, trailing_pct):
+            print(f"❌ Position update notification error: {e}")
+    
+    async def send_position_closed(self, final_pnl=None):
         try:
-            # Safe value handling
-            pnl_pct = float(pnl_pct) if pnl_pct is not None else 0.0
-            trailing_pct = float(trailing_pct) if trailing_pct is not None else 1.0
-            
-            symbol_short = symbol.replace('/', '') if symbol else 'ETHUSDT'
-            
-            msg = (f"🔒 PROFIT LOCK!\n"
-                   f"📊 {symbol_short}\n"
-                   f"🎯 Trailing: {trailing_pct:.1f}%\n"
-                   f"⏰ {datetime.now():%H:%M:%S}")
-            await self.send_message(msg)
-        except Exception as e:
-            print(f"⚠️ Profit lock notification error: {e}")
+            message = f"""
+🏁 <b>POSITION CLOSED</b>
 
-    async def error_notification(self, error_msg):
-        try:
-            # Safe error message handling
-            error_msg = str(error_msg) if error_msg is not None else "Unknown error"
+📊 <b>Symbol:</b> ETHUSDT
+"""
             
-            msg = f"⚠️ ERROR: {error_msg}\n⏰ {datetime.now():%H:%M:%S}"
-            await self.send_message(msg)
-        except Exception as e:
-            print(f"⚠️ Error notification failed: {e}")
-
-    async def bot_started(self, symbol, balance):
-        try:
-            # Safe value handling - THIS WAS CAUSING THE ERROR
-            balance = float(balance) if balance is not None else 0.0
-            symbol_short = symbol.replace('/', '') if symbol else 'ETHUSDT'
+            if final_pnl is not None:
+                emoji = "✅" if final_pnl >= 0 else "❌"
+                message += f"{emoji} <b>Final PnL:</b> ${final_pnl:.2f}\n"
             
-            msg = (f"🤖 BOT STARTED\n"
-                   f"📊 {symbol_short}\n"
-                   f"💰 ${balance:.0f}\n"  # Now safe - balance is guaranteed to be a float
-                   f"💸 Risk: $100/trade\n"
-                   f"⏰ {datetime.now():%H:%M:%S}")
-            await self.send_message(msg)
+            message += f"\n⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}"
+            
+            await self.send_message(message)
         except Exception as e:
-            print(f"⚠️ Bot started notification error: {e}")
-
-    async def bot_stopped(self):
+            print(f"❌ Position closed notification error: {e}")
+    
+    async def send_profit_lock(self, new_stop, current_pnl):
         try:
-            msg = f"⏹️ BOT STOPPED\n⏰ {datetime.now():%H:%M:%S}"
-            await self.send_message(msg)
+            message = f"""
+🔒 <b>PROFIT LOCK ACTIVATED</b>
+
+📊 <b>Symbol:</b> ETHUSDT
+🛑 <b>New Stop:</b> ${new_stop:.2f}
+💰 <b>Current PnL:</b> ${current_pnl:.2f}
+
+⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
+"""
+            
+            await self.send_message(message)
         except Exception as e:
-            print(f"⚠️ Bot stopped notification error: {e}")
+            print(f"❌ Profit lock notification error: {e}")
+    
+    async def send_error_alert(self, error_type, error_message):
+        try:
+            message = f"""
+⚠️ <b>BOT ERROR ALERT</b>
+
+🔧 <b>Type:</b> {error_type}
+📝 <b>Message:</b> {error_message}
+
+⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
+"""
+            
+            await self.send_message(message)
+        except Exception as e:
+            print(f"❌ Error alert notification error: {e}")
+    
+    async def send_bot_status(self, status, additional_info=None):
+        try:
+            status_emoji = {
+                'started': '🚀',
+                'stopped': '🛑',
+                'connected': '✅',
+                'disconnected': '❌',
+                'error': '⚠️'
+            }
+            
+            emoji = status_emoji.get(status.lower(), '📊')
+            
+            message = f"""
+{emoji} <b>BOT STATUS: {status.upper()}</b>
+
+📊 <b>Symbol:</b> ETHUSDT
+🔄 <b>Strategy:</b> RSI + MFI + Break & Retest
+"""
+            
+            if additional_info:
+                message += f"📝 <b>Info:</b> {additional_info}\n"
+            
+            message += f"\n⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}"
+            
+            await self.send_message(message)
+        except Exception as e:
+            print(f"❌ Bot status notification error: {e}")
+    
+    async def send_daily_summary(self, trades_count, total_pnl, win_rate):
+        try:
+            emoji = "📈" if total_pnl >= 0 else "📉"
+            
+            message = f"""
+{emoji} <b>DAILY TRADING SUMMARY</b>
+
+📊 <b>Symbol:</b> ETHUSDT
+🔢 <b>Total Trades:</b> {trades_count}
+💰 <b>Total PnL:</b> ${total_pnl:.2f}
+🎯 <b>Win Rate:</b> {win_rate:.1f}%
+
+📅 <b>Date:</b> {datetime.now().strftime('%Y-%m-%d')}
+"""
+            
+            await self.send_message(message)
+        except Exception as e:
+            print(f"❌ Daily summary notification error: {e}")
+    
+    def test_connection(self):
+        if not self.enabled:
+            print("❌ Telegram not configured")
+            return False
+        
+        try:
+            response = requests.post(
+                f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+                json={
+                    'chat_id': self.chat_id,
+                    'text': '✅ Telegram bot connection test successful!',
+                    'parse_mode': 'HTML'
+                },
+                timeout=10
+            )
+            
+            success = response.status_code == 200
+            print("✅ Telegram connection test successful" if success else f"❌ Telegram test failed: {response.status_code}")
+            return success
+        except Exception as e:
+            print(f"❌ Telegram test error: {e}")
+            return False

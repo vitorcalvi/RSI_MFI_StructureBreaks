@@ -1,0 +1,18 @@
+{
+  "rsi_length": 5,
+  "mfi_length": 3,
+  "oversold": 45,
+  "overbought": 55,
+  "structure_lookback": 120,
+  "structure_buffer_pct": 0.3,
+  "fixed_risk_pct": 0.01,
+  "reward_ratio": 4.0,
+  "profit_lock_threshold": 3.0,
+  "trailing_stop_pct": 0.01,
+  "entry_fee_pct": 0.00055,
+  "exit_fee_pct": 0.00055,
+  "max_position_time": 15,
+  "cooldown_seconds": 5,
+  "emergency_stop_pct": 0.02,
+  "min_profit_distance": 0.003
+}

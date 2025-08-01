@@ -1,78 +1,91 @@
-import os
-import sys
+#!/usr/bin/env python3
+"""
+High-Frequency Crypto Scalping Bot - Bybit
+RSI(5) + MFI(5) + Break & Retest Strategy
+15 Second Max Hold | 0.5% Risk | 1.5:1 Reward
+"""
+
 import asyncio
+import signal
 from dotenv import load_dotenv
-
-load_dotenv(override=True)
-
-# Add project root to path
-project_root = os.path.dirname(os.path.abspath(__file__))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 from core.trade_engine import TradeEngine
 
-def display_startup_info(engine, wallet_balance, current_price):
-    """Display streamlined startup info with safe formatting"""
-    try:
-        mode = "Testnet" if engine.demo_mode else "🔴 LIVE"
-        symbol = engine.symbol.replace('/', '') if engine.symbol else 'ETHUSDT'
-        
-        # Safe balance formatting
-        balance_str = f"{wallet_balance:,.0f}" if wallet_balance is not None else "0"
-        
-        # Safe risk formatting
-        risk_amount = getattr(engine.risk_manager, 'fixed_risk_usd', 100)
-        risk_str = f"{risk_amount:.0f}" if risk_amount is not None else "100"
-        
-        print(f"🚀 {symbol} Bot Started | {mode} Mode | Balance: ${balance_str} | Risk: ${risk_str}/trade")
-        
-    except Exception as e:
-        print(f"🚀 Bot Started | Mode: {'Testnet' if engine.demo_mode else 'Live'} | Status: Ready")
+load_dotenv()
 
-async def main():
-    engine = None
-    try:
-        engine = TradeEngine()
-        
-        if not engine.connect():
-            print("❌ Connection Failed | Check API credentials")
-            return
-        
-        # Get current data for startup display with safe handling
+class HFScalpingBot:
+    def __init__(self):
+        self.engine = TradeEngine()
+        self.running = False
+    
+    async def start(self):
         try:
-            wallet_balance = engine.get_wallet_balance()
-            ticker = engine.exchange.get_tickers(category="linear", symbol=engine.linear)
-            current_price = float(ticker['result']['list'][0]['lastPrice']) if ticker.get('retCode') == 0 else 3500.0
+            if not self.engine.connect():
+                print("❌ Failed to connect to exchange")
+                return
             
-            display_startup_info(engine, wallet_balance, current_price)
+            await self.display_startup_info()
+            self.running = True
             
-            await engine.notifier.bot_started(engine.symbol, wallet_balance)
-        except Exception as e:
-            print(f"⚠️ Startup info error: {e}")
-            print("🚀 Bot Starting | Ready to trade")
+            while self.running:
+                try:
+                    await self.engine.run_cycle()
+                    await asyncio.sleep(0.5)
+                except KeyboardInterrupt:
+                    break
+                except Exception as e:
+                    print(f"❌ Error in main loop: {e}")
+                    await asyncio.sleep(2)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            await self.shutdown()
+    
+    async def display_startup_info(self):
+        print("⚡" * 60)
+        print("🚀 STARTING ETHUSDT HIGH-FREQUENCY SCALPING BOT")
+        print("⚡" * 60)
+        print("📊 Strategy: RSI(5) + MFI(5) + Break & Retest")
+        print("⏱️  Max Hold: 15 seconds")
+        print("💰 Risk: 0.5% per trade")
+        print("🎯 Reward: 1.5:1 ratio")
+        print("🔄 Polling: 500ms")
+        print("🛑 Emergency Stop: 2%")
+        print("📈 Profit Lock: 0.3%")
+        print("🔄 Trailing: 0.5%")
         
-        await engine.run()
+        await self.engine.notifier.send_bot_status("started", "HF Scalping Mode Active")
         
-    except KeyboardInterrupt:
-        print("\n🛑 Shutdown Initiated | Closing positions...")
+        print("-" * 60)
+        print("⚡ HIGH-FREQUENCY MODE ACTIVE")
+        print("-" * 60)
+    
+    async def shutdown(self):
+        print("\n🛑 Initiating HF bot shutdown...")
+        self.running = False
         
-    except Exception as e:
-        print(f"\n❌ Fatal Error | {e}")
+        if self.engine.position:
+            print("⚡ Force closing position...")
+            await self.engine.close_position("HF Bot shutdown")
         
-    finally:
-        if engine:
-            try:
-                await engine.stop()
-                print("✅ Bot Stopped | All positions closed | Session complete")
-            except:
-                pass
+        await self.engine.notifier.send_bot_status("stopped", "HF Bot safely shutdown")
+        print("✅ HF Scalping bot stopped safely")
+
+def signal_handler(signum, frame):
+    print(f"\n⚡ Received signal {signum} - Emergency shutdown...")
+    raise KeyboardInterrupt
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, signal_handler)
+    bot = HFScalpingBot()
+    
     try:
-        asyncio.run(main())
+        print("⚡ Initializing High-Frequency Scalping Bot...")
+        asyncio.run(bot.start())
     except KeyboardInterrupt:
-        print("👋 Done")
+        print("\n👋 HF Bot stopped by user")
     except Exception as e:
-        print(f"❌ Fatal: {e}")
-        sys.exit(1)
+        print(f"❌ Critical HF bot error: {e}")
+        try:
+            asyncio.run(bot.engine.notifier.send_error_alert("Critical Error", str(e)))
+        except:
+            pass
