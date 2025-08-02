@@ -319,32 +319,22 @@ class TradeEngine:
             
             print("\n" * 50)  # Clear screen
             
-            print("=" * 60)
-            print(f"⚡  {symbol_display} HIGH-FREQUENCY SCALPING BOT")
-            print("=" * 60)
-            print()
-            print("⚙️  STRATEGY SETUP")
-            print("─" * 77)
-            config = self.strategy.config
-            print(f"📊 RSI({config['rsi_length']}) MFI({config['mfi_length']}) │ "
-                  f"🔥 Cooldown: {config['cooldown_seconds']}s │ "
-                  f"⚡ Mode: ULTRA-AGGRESSIVE")
-            print(f"📈 Uptrend: ≤{config['uptrend_oversold']} │ "
-                  f"📉 Downtrend: ≥{config['downtrend_overbought']} │ "
-                  f"⚖️ Neutral: {config['neutral_oversold']}-{config['neutral_overbought']}")
-            print("─" * 77)
-            print()
-            print("📊  EXIT REASONS SUMMARY")
-            print("─" * 77)
-            print(f"🎯 profit_target_$20 : {self.exit_reasons['profit_target_$20']:2d} │ "
-                  f"🚨 emergency_stop : {self.exit_reasons['emergency_stop']:2d} │ "
-                  f"⏰ max_hold_time : {self.exit_reasons['max_hold_time']:2d}")
-            print(f"💰 profit_lock       : {self.exit_reasons['profit_lock']:2d} │ "
-                  f"📉 trailing_stop    : {self.exit_reasons['trailing_stop']:2d} │ "
-                  f"🔄 position_closed : {self.exit_reasons['position_closed']:2d}")
-            print("─" * 77)
-            print()
             
+            
+            w = 77
+            print(f"{'='*w}\n⚡  {symbol_display} HIGH-FREQUENCY SCALPING BOT\n{'='*w}\n")
+            c = self.strategy.config; er = self.exit_reasons
+
+            print("⚙️  STRATEGY SETUP\n" + "─"*w)
+            print(f"📊 RSI({c['rsi_length']}) MFI({c['mfi_length']}) │ 🔥 Cooldown: {c['cooldown_seconds']}s │ ⚡ Mode: ULTRA-AGGRESSIVE")
+            print(f"📈 Uptrend: ≤{c['uptrend_oversold']} │ 📉 Downtrend: ≥{c['downtrend_overbought']} │ ⚖️ Neutral: {c['neutral_oversold']}-{c['neutral_overbought']}")
+            print("─"*w + "\n")
+
+            print("📊  EXIT REASONS SUMMARY\n" + "─"*w)
+            print(f"🎯 profit_target_$20 : {er['profit_target_$20']:2d} │ 🚨 emergency_stop : {er['emergency_stop']:2d} │ ⏰ max_hold_time : {er['max_hold_time']:2d}")
+            print(f"💰 profit_lock       : {er['profit_lock']:2d} │ 📉 trailing_stop    : {er['trailing_stop']:2d} │ 🔄 position_closed : {er['position_closed']:2d}")
+            print("─"*w + "\n")
+
             # Market info
             print(f"⏰ {time}   |   💰 ${price_formatted}")
             
