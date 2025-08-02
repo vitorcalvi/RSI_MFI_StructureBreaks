@@ -10,7 +10,7 @@ class RiskManager:
             'reward_ratio': 2.5,
             'max_position_time': 75,
             'emergency_stop_pct': 0.006,
-            'profit_lock_threshold': 0.001,
+            'profit_lock_threshold': 0.002,
             'trailing_stop_pct': 0.0015,
             'entry_fee_pct': 0.00055,
             'exit_fee_pct': 0.00055,
