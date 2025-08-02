@@ -3,16 +3,30 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+"""
+1-Minute Trading Config (FIXED)
+
+Values Reasoning:
+- 7500 USDT: Large enough to profit from small 1-min moves (~2.14 ETH position)
+- 12 USDT threshold: Trading fees = 1.8 USDT, need 12+ for true profit
+- 180 seconds: RSI signals on 1-min complete in 1-3 minutes typically
+- 1.5 reward ratio: Realistic for quick scalping vs 2.5+ for swing trades
+- 0.6% stop: Limits max loss to ~45 USDT, prevents blown account
+- 55% win rate needed for break-even with these settings
+"""
+
 class RiskManager:
     def __init__(self):
         self.config = {
-    'fixed_position_usdt': 7500,
-    'fixed_break_even_threshold': 12,
-    'leverage': 10,
-    'reward_ratio': 1.5,
-    'max_position_time': 180,
-    'emergency_stop_pct': 0.006
+    'fixed_position_usdt': 7500,       # Fixed position size - optimized for 1-min $5-8 moves
+    'fixed_break_even_threshold': 12,  # Min profit to close - covers fees + small profit
+    'leverage': 10,                    # Standard leverage
+    'reward_ratio': 1.5,              # Risk/reward for 1-min scalping
+    'max_position_time': 180,          # 3min max hold for 1-min signals
+    'emergency_stop_pct': 0.006        # 0.6% emergency stop
 }
+
         self.symbol = os.getenv('TRADING_SYMBOL')
     
     def validate_trade(self, signal, balance, current_price):
