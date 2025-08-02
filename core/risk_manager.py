@@ -11,8 +11,6 @@ class RiskManager:
             'reward_ratio': 2.5,
             'max_position_time': 75,
             'fixed_profit_lock_threshold': 11,
-            'entry_fee_pct': 0.00055,
-            'exit_fee_pct': 0.00055,
             'emergency_stop_pct': 0.006
         }
         self.symbol = os.getenv('TRADING_SYMBOL')
