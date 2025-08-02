@@ -23,24 +23,25 @@ class RSIMFIStrategy:
     3. Neutral + RSI ≤40 + MFI ≤35 → BUY (reversal)
     4. Neutral + RSI ≥75 + MFI ≥80 → SELL (reversal)
     
-    RISK MANAGEMENT:
-    • Structure stops: 0.15% from recent high/low
-    • Emergency stop: 0.6% max loss (risk manager)
+    RISK MANAGEMENT (Aligned with RiskManager):
+    • Fixed position: 9091 USDT (~2.59 ETH at $3,500)
+    • Profit target: $15 USDT (covers $10 fees + $5 profit)
+    • Emergency stop: 0.6% max loss (~$55 on 9091 position)
     • Max hold: 180 seconds (3 minutes)
-    • Fixed position: $10K USDT (~2.6 ETH at $3,500)
+    • Structure stops: 0.15% from recent high/low
     
     WHY THIS WORKS FOR SCALPING:
     • Mean reversion: Extreme RSI/MFI often reverse quickly
     • Volume confirmation: MFI prevents fake breakouts
     • Trend awareness: Avoids fighting strong directional moves
-    • Tight stops: Limits downside on wrong entries
-    • Quick exits: Captures 0.3-0.8% moves efficiently
+    • Fixed sizing: Consistent $15+ profit targets
+    • Quick exits: Captures 0.4-0.8% moves within 3 minutes
     
     OPTIMIZED FOR:
-    • ETH/USDT perpetual futures
+    • ETH/USDT perpetual futures with 10x leverage
     • 1-minute candlestick data
-    • High-volatility sessions (US/EU overlap)
-    • $15+ profit targets (covers fees + profit)
+    • Bybit fee structure (0.055% taker)
+    • $15+ profit targets (0.16% on 9091 USDT position)
     """
     
     def __init__(self):
@@ -234,23 +235,6 @@ class RSIMFIStrategy:
         return signal
     
     def _create_signal(self, action, trend, rsi, mfi, price, data, is_short=False):
-        """
-        Create validated trading signal with crypto-optimized risk management
-        
-        CRYPTO SHORTING CHALLENGES:
-        • Violent upward moves even in downtrends (DeFi, news, liquidations)
-        • Lower volume on way down vs way up
-        • Institutional buying on any significant dip
-        • Need extreme overbought + distribution confirmation
-        
-        POSITION SIZING BY DIRECTION:
-        • Longs: Full $10K position (crypto bias upward)
-        • Shorts: $7K position (30% reduction for higher risk)
-        
-        STOP LOSS METHODOLOGY:
-        • Longs: 0.15% below recent low (standard)
-        • Shorts: 0.1% above recent high (tighter - crypto bounces fast)
-        """
         window = data.tail(20)  # Shorter window for HF
         
         if action == 'BUY':
@@ -269,18 +253,20 @@ class RSIMFIStrategy:
         
         # Additional short validation - avoid shorts near support
         if is_short:
-            # Check if price is near recent significant low (poor short setup)
-            recent_low_20 = data.tail(100)['low'].min()  # Longer lookback
-            distance_from_low = (price - recent_low_20) / recent_low_20
+            recent_low_100 = data.tail(100)['low'].min()
+            distance_from_low = (price - recent_low_100) / recent_low_100
             if distance_from_low < 0.02:  # Within 2% of recent low
                 return None
+            
+            # Extra validation for shorts - ensure strong distribution signal
+            if mfi < self.config['short_mfi_threshold'] or rsi < self.config['short_rsi_minimum']:
+                return None
         
-        # Confidence calculation
+        # Calculate confidence - boost for proven uptrend longs
         rsi_strength = abs(50 - rsi)
         mfi_strength = abs(50 - mfi)
         base_confidence = (rsi_strength + mfi_strength) * 2
         
-        # Boost confidence for successful uptrend longs
         if action == 'BUY' and trend == 'strong_uptrend':
             base_confidence *= 1.2  # 20% boost for proven strategy
         
@@ -295,10 +281,14 @@ class RSIMFIStrategy:
             'structure_stop': structure_stop,
             'level': level,
             'signal_type': f"{trend}_{action.lower()}",
-            'confidence': round(confidence, 1)
+            'confidence': round(confidence, 1),
+            # Risk Manager Alignment
+            'target_profit_usdt': self.config['target_profit_usdt'],
+            'estimated_move_pct': round(target_distance * 100, 2),
+            'max_hold_seconds': self.config['max_hold_seconds']
         }
         
-        # Add short-specific metadata
+        # Add short-specific metadata for risk manager
         if is_short:
             signal['position_size_multiplier'] = self.config['short_position_reduction']
             signal['max_hold_seconds'] = 60  # Faster exits for shorts

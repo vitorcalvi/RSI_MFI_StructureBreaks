@@ -1,13 +1,4 @@
-#!/usr/bin/env python3
-"""
-    ETH/USDT Scalping Risk Manager - Optimized for $3,500 price level
-    
-    Config Reasoning:
-    - 9091 USDT: ~2.59 ETH position at $3,507 - optimal for $8-15 moves
-    - 10 USDT threshold: Market fee 0.11% = ~10 USDT, covers fees + profit  
-    - 180s max hold: RSI signals on 1-min complete in 1-3 minutes
-    - 0.6% emergency stop: Limits max loss to ~55 USDT on 9091 position
-"""
+
 
 import asyncio
 import signal
@@ -50,12 +41,8 @@ class HFScalpingBot:
         config = self.engine.strategy.config
         risk = self.engine.risk_manager.config
         
-        print("⚡" * 60)
         print(f"🚀 {self.engine.symbol} HIGH-FREQUENCY SCALPING BOT")
         print("⚡" * 60)
-        print(f"📊 RSI({config['rsi_length']}) + MFI({config['mfi_length']}) | Max Hold: {risk['max_position_time']}s")
-        print(f"💰 Position: ${risk['fixed_position_usdt']:,.0f} | Balance: ${balance:,.2f}")
-        print("-" * 60)
         
         await self.engine.notifier.send_bot_status("started", "HF Scalping Mode Active - Fixed $10K")
     
