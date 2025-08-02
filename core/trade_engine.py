@@ -308,8 +308,9 @@ class TradeEngine:
             self._track_exit_reason('position_closed')
             self._log_trade("EXIT", price, reason="position_closed", pnl=pnl)
     
+    # CRITICAL: DO NOT MODIFY THIS FUNCTION
     def _display_status(self):
-        """Display status"""
+        """Display status """
         try:
             price = float(self.price_data['close'].iloc[-1])
             time = self.price_data.index[-1].strftime('%H:%M:%S')
