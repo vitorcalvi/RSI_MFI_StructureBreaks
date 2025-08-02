@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-High-Frequency Crypto Scalping Bot - Streamlined Version
-RSI + MFI Strategy with Dynamic Symbol Configuration
+High-Frequency Crypto Scalping Bot
+RSI + MFI Strategy with $20 Profit Target
 """
 
 import asyncio
@@ -17,7 +17,7 @@ class HFScalpingBot:
     def __init__(self):
         self.engine = TradeEngine()
         self.running = False
-        self.profit_target = 20.0  # $20 USD profit target
+        self.profit_target = 20.0  # $20 profit target
         
     async def start(self):
         """Start the trading bot"""
@@ -27,7 +27,6 @@ class HFScalpingBot:
         
         await self._display_startup_info()
         self.running = True
-        print("⚡ Starting trading loop...")
         
         while self.running:
             try:
@@ -37,13 +36,13 @@ class HFScalpingBot:
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                print(f"❌ Error in main loop: {e}")
+                print(f"❌ Error: {e}")
                 await asyncio.sleep(2)
         
         await self._shutdown()
     
     async def _check_profit_target(self):
-        """Monitor and close position when profit target is reached"""
+        """Check profit target"""
         if not self.engine.position:
             return
         
@@ -62,7 +61,7 @@ class HFScalpingBot:
             )
     
     async def _display_startup_info(self):
-        """Display bot startup information"""
+        """Display startup info"""
         balance = await self.engine.get_account_balance()
         strategy_info = self.engine.strategy.get_strategy_info()
         risk_config = self.engine.risk_manager.config
@@ -82,20 +81,18 @@ class HFScalpingBot:
         await self.engine.notifier.send_bot_status("started", "HF Scalping Mode Active")
     
     async def _shutdown(self):
-        """Shutdown the bot safely"""
-        print("\n🛑 Initiating bot shutdown...")
+        """Shutdown bot"""
+        print("\n🛑 Shutting down...")
         self.running = False
         
         if self.engine.position:
-            print("⚡ Force closing position...")
             await self.engine._close_position("Bot shutdown")
         
         await self.engine.notifier.send_bot_status("stopped", "Bot safely shutdown")
-        print("✅ Bot stopped safely")
+        print("✅ Bot stopped")
 
 def _signal_handler(signum, frame):
-    """Handle system signals for graceful shutdown"""
-    print(f"\n⚡ Received signal {signum} - Emergency shutdown...")
+    """Handle signals"""
     raise KeyboardInterrupt
 
 def main():
@@ -106,12 +103,12 @@ def main():
     bot = HFScalpingBot()
     
     try:
-        print("⚡ Initializing High-Frequency Scalping Bot...")
+        print("⚡ Starting High-Frequency Scalping Bot...")
         asyncio.run(bot.start())
     except KeyboardInterrupt:
         print("\n👋 Bot stopped by user")
     except Exception as e:
-        print(f"❌ Critical bot error: {e}")
+        print(f"❌ Critical error: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

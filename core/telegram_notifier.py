@@ -11,9 +11,6 @@ class TelegramNotifier:
         self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
         self.symbol = os.getenv('TRADING_SYMBOL', 'ADAUSDT')
         self.enabled = bool(self.bot_token and self.chat_id)
-        
-        status = "✅ enabled" if self.enabled else "⚠️ disabled (missing credentials)"
-        print(f"Telegram notifications {status}")
     
     async def send_message(self, message):
         """Send message to Telegram"""
@@ -32,8 +29,7 @@ class TelegramNotifier:
                 timeout=10
             )
             return response.status_code == 200
-        except Exception as e:
-            print(f"❌ Telegram send error: {e}")
+        except:
             return False
     
     async def send_trade_entry(self, signal_data, price, quantity, strategy_info):
@@ -51,7 +47,6 @@ class TelegramNotifier:
 
 📋 <b>Strategy:</b> {signal_data['signal_type']}
 📊 <b>RSI:</b> {signal_data['rsi']:.1f} | <b>MFI:</b> {signal_data['mfi']:.1f}
-📏 <b>Structure Level:</b> ${signal_data['level']:.2f}
 🎯 <b>Confidence:</b> {signal_data.get('confidence', 0):.0f}%
 
 ⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
@@ -96,20 +91,6 @@ class TelegramNotifier:
 📊 <b>Symbol:</b> {self.symbol}
 📋 <b>Strategy:</b> RSI/MFI Strategy
 {f"💬 <b>Message:</b> {message_text}" if message_text else ""}
-
-⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
-"""
-        
-        await self.send_message(message)
-    
-    async def send_error_alert(self, error_type, error_message):
-        """Send error alert notification"""
-        message = f"""
-❌ <b>ERROR ALERT</b>
-
-📊 <b>Symbol:</b> {self.symbol}
-🚨 <b>Type:</b> {error_type}
-💬 <b>Message:</b> {error_message}
 
 ⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
 """

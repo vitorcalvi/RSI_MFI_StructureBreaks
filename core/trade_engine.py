@@ -25,28 +25,23 @@ class TradeEngine:
         self.api_key = os.getenv(f'{prefix}BYBIT_API_KEY')
         self.api_secret = os.getenv(f'{prefix}BYBIT_API_SECRET')
         
-        # State variables
+        # State
         self.exchange = None
         self.position = None
         self.position_start_time = None
         self.price_data = pd.DataFrame()
         self.trade_id = 0
-        self.current_signal = None
         
-        # Exit reasons tracking
+        # Exit tracking
         self.exit_reasons = {
             'profit_target_$20': 0, 'emergency_stop': 0, 'max_hold_time': 0,
             'profit_lock': 0, 'trailing_stop': 0, 'position_closed': 0,
             'bot_shutdown': 0, 'manual_exit': 0
         }
         
-        # Symbol-specific trading rules
         self._set_symbol_rules()
-        
         os.makedirs("logs", exist_ok=True)
         self.log_file = "logs/trades.log"
-        
-        print(f"⚡ Trade Engine initialized - {self.symbol}")
     
     def _set_symbol_rules(self):
         """Set symbol-specific trading rules"""
@@ -61,11 +56,10 @@ class TradeEngine:
                 self.qty_step, self.min_qty = step, min_qty
                 return
         
-        # Default
         self.qty_step, self.min_qty = '1', 1.0
     
     def connect(self):
-        """Connect to Bybit exchange"""
+        """Connect to exchange"""
         try:
             self.exchange = HTTP(
                 demo=self.demo_mode,
@@ -75,15 +69,10 @@ class TradeEngine:
             
             info = self.exchange.get_server_time()
             if info.get('retCode') != 0:
-                print(f"❌ Connection failed: {info.get('retMsg')}")
                 return False
             
-            mode = 'testnet' if self.demo_mode else 'mainnet'
-            print(f"✅ Connected to Bybit {mode}")
             return True
-            
-        except Exception as e:
-            print(f"❌ Connection error: {e}")
+        except:
             return False
     
     def format_quantity(self, qty):
@@ -100,31 +89,29 @@ class TradeEngine:
             return f"{qty:.3f}"
     
     def _log_trade(self, action, price, **kwargs):
-        """Log trade to file"""
+        """Log trade"""
         timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         
         if action == "ENTRY":
             self.trade_id += 1
             signal = kwargs.get('signal', {})
             qty = kwargs.get('quantity', '')
-            log_line = (f"{timestamp}  id={self.trade_id}  action=ENTRY  side={signal.get('action', '')}  "
-                       f"price={price:.2f}  size={qty}  strat={signal.get('signal_type', '')}  "
-                       f"rsi={signal.get('rsi', 0):.1f}  mfi={signal.get('mfi', 0):.1f}  "
-                       f"structure_stop={signal.get('structure_stop', 0):.2f}  level={signal.get('level', 0):.2f}")
-        else:  # EXIT
+            log_line = (f"{timestamp} id={self.trade_id} action=ENTRY side={signal.get('action', '')} "
+                       f"price={price:.2f} size={qty} rsi={signal.get('rsi', 0):.1f} mfi={signal.get('mfi', 0):.1f}")
+        else:
             duration = (datetime.now() - self.position_start_time).total_seconds() if self.position_start_time else 0
             reason = kwargs.get('reason', '').lower().replace(' ', '_')
-            log_line = (f"{timestamp}  id={self.trade_id}  action=EXIT   trigger={reason}  "
-                       f"price={price:.2f}  pnl={kwargs.get('pnl', 0):.2f}  hold_s={duration:.1f}")
+            log_line = (f"{timestamp} id={self.trade_id} action=EXIT trigger={reason} "
+                       f"price={price:.2f} pnl={kwargs.get('pnl', 0):.2f} hold_s={duration:.1f}")
         
         try:
             with open(self.log_file, "a") as f:
                 f.write(log_line + "\n")
-        except Exception as e:
-            print(f"❌ Logging error: {e}")
+        except:
+            pass
     
     def _track_exit_reason(self, reason):
-        """Track exit reason for statistics"""
+        """Track exit reason"""
         if 'profit_target' in reason:
             self.exit_reasons['profit_target_$20'] += 1
         elif reason in self.exit_reasons:
@@ -156,7 +143,7 @@ class TradeEngine:
         self._display_status()
     
     async def _update_market_data(self):
-        """Fetch and update market data"""
+        """Update market data"""
         try:
             klines = self.exchange.get_kline(
                 category="linear",
@@ -178,13 +165,11 @@ class TradeEngine:
             
             self.price_data = df.sort_values('timestamp').set_index('timestamp')
             return True
-            
-        except Exception as e:
-            print(f"❌ Market data error: {e}")
+        except:
             return False
     
     async def _check_position_status(self):
-        """Check current position status from exchange"""
+        """Check position status"""
         try:
             positions = self.exchange.get_positions(category="linear", symbol=self.symbol)
             
@@ -203,18 +188,16 @@ class TradeEngine:
                 self.position_start_time = datetime.now()
             
             self.position = pos_list[0]
-            
-        except Exception as e:
-            print(f"❌ Position status error: {e}")
+        except:
+            pass
     
     def _reset_position(self):
         """Reset position state"""
         self.position = None
         self.position_start_time = None
-        self.current_signal = None
     
     async def _check_position_exit(self):
-        """Check if position should be closed based on risk management"""
+        """Check if position should be closed"""
         if not self.position or not self.position_start_time:
             return
         
@@ -225,39 +208,28 @@ class TradeEngine:
         position_age = (datetime.now() - self.position_start_time).total_seconds()
         
         should_close, reason = self.risk_manager.should_close_position(
-            current_price=current_price,
-            entry_price=entry_price,
-            side=side,
-            unrealized_pnl=unrealized_pnl,
-            position_age_seconds=position_age
+            current_price, entry_price, side, unrealized_pnl, position_age
         )
         
         if should_close:
             await self._close_position(reason)
     
     async def _execute_trade(self, signal):
-        """Execute trade based on signal"""
+        """Execute trade"""
         current_price = float(self.price_data['close'].iloc[-1])
         balance = await self.get_account_balance()
         
         if not balance:
-            print("⚠️ No balance available")
             return
         
-        is_valid, reason = self.risk_manager.validate_trade(signal, balance, current_price)
+        is_valid, _ = self.risk_manager.validate_trade(signal, balance, current_price)
         if not is_valid:
-            print(f"⚠️ Trade rejected: {reason}")
             return
         
-        qty = self.risk_manager.calculate_position_size(
-            balance=balance,
-            entry_price=current_price,
-            stop_price=signal['structure_stop']
-        )
-        
+        qty = self.risk_manager.calculate_position_size(balance, current_price, signal['structure_stop'])
         formatted_qty = self.format_quantity(qty)
+        
         if formatted_qty == "0" or float(formatted_qty) < 0.001:
-            print("⚠️ Position size too small")
             return
         
         try:
@@ -271,21 +243,13 @@ class TradeEngine:
             )
             
             if order.get('retCode') == 0:
-                self.current_signal = signal
                 self._log_trade("ENTRY", current_price, signal=signal, quantity=formatted_qty)
-                
-                strategy_info = self.strategy.get_strategy_info()
-                await self.notifier.send_trade_entry(signal, current_price, formatted_qty, strategy_info)
-                
-                print(f"⚡ {signal['action']} order placed - Qty: {formatted_qty}")
-            else:
-                print(f"❌ Order failed: {order.get('retMsg')}")
-                
-        except Exception as e:
-            print(f"❌ Trade execution error: {e}")
+                await self.notifier.send_trade_entry(signal, current_price, formatted_qty, self.strategy.get_strategy_info())
+        except:
+            pass
     
     async def _close_position(self, reason="Manual"):
-        """Close current position"""
+        """Close position"""
         if not self.position:
             return
         
@@ -314,19 +278,12 @@ class TradeEngine:
                 current_mfi = indicators.get('mfi', pd.Series([0])).iloc[-1] if 'mfi' in indicators else 0
                 
                 self._track_exit_reason(reason)
-                self._log_trade("EXIT", current_price, reason=reason, pnl=pnl, 
-                               rsi=current_rsi, mfi=current_mfi)
+                self._log_trade("EXIT", current_price, reason=reason, pnl=pnl)
                 
                 exit_data = {'trigger': reason, 'rsi': current_rsi, 'mfi': current_mfi}
-                strategy_info = self.strategy.get_strategy_info()
-                await self.notifier.send_trade_exit(exit_data, current_price, pnl, duration, strategy_info)
-                
-                print(f"⚡ Position closed - {reason}")
-            else:
-                print(f"❌ Close order failed: {order.get('retMsg')}")
-                
-        except Exception as e:
-            print(f"❌ Close position error: {e}")
+                await self.notifier.send_trade_exit(exit_data, current_price, pnl, duration, self.strategy.get_strategy_info())
+        except:
+            pass
     
     async def get_account_balance(self):
         """Get account balance"""
@@ -339,28 +296,20 @@ class TradeEngine:
                 return float(usdt['walletBalance']) if usdt else 0
             
             return 0
-        except Exception as e:
-            print(f"❌ Balance error: {e}")
+        except:
             return 0
     
     async def _on_position_closed(self):
-        """Handle position closed event"""
+        """Handle position closed externally"""
         if self.position:
             pnl = float(self.position.get('unrealisedPnl', 0))
             price = float(self.price_data['close'].iloc[-1]) if len(self.price_data) > 0 else 0
             
-            indicators = self.strategy.calculate_indicators(self.price_data)
-            current_rsi = indicators.get('rsi', pd.Series([0])).iloc[-1] if 'rsi' in indicators else 0
-            current_mfi = indicators.get('mfi', pd.Series([0])).iloc[-1] if 'mfi' in indicators else 0
-            
             self._track_exit_reason('position_closed')
-            self._log_trade("EXIT", price, reason="position_closed", pnl=pnl,
-                           rsi=current_rsi, mfi=current_mfi)
-        
-        print("📝 Position closed externally")
+            self._log_trade("EXIT", price, reason="position_closed", pnl=pnl)
     
     def _display_status(self):
-        """Display trading status with exit reasons"""
+        """Display status"""
         try:
             price = float(self.price_data['close'].iloc[-1])
             time = self.price_data.index[-1].strftime('%H:%M:%S')

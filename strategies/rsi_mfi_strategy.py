@@ -7,13 +7,12 @@ class RSIMFIStrategy:
     def __init__(self, config_file="strategies/rsi_mfi.json"):
         self.config = self._load_config(config_file)
         self.last_signal_time = None
-        print("⚡ RSI/MFI Strategy - 100% WIN RATE MODE")
     
     def _load_config(self, config_file):
-        """Load strategy configuration with fallback"""
+        """Load strategy configuration"""
         default_config = {
             "rsi_length": 14, "mfi_length": 14,
-            "uptrend_oversold": 40, "downtrend_overbought": 60,
+            "uptrend_oversold": 40, "downtrend_overbought": 50,
             "neutral_oversold": 25, "neutral_overbought": 75,
             "cooldown_seconds": 5
         }
@@ -63,32 +62,29 @@ class RSIMFIStrategy:
         current_price = close.iloc[-1]
         price_5_ago = close.iloc[-5]
         
-        # Trend conditions
-        strong_uptrend = (ema10 > ema21 > ema50 and 
-                         current_price > ema10 > ema21 and 
-                         current_price > price_5_ago * 1.001)
-        
-        strong_downtrend = (ema10 < ema21 < ema50 and 
-                           current_price < ema10 < ema21 and 
-                           current_price < price_5_ago * 0.999)
-        
-        if strong_uptrend:
+        # Strong uptrend
+        if (ema10 > ema21 > ema50 and 
+            current_price > ema10 > ema21 and 
+            current_price > price_5_ago * 1.001):
             return 'strong_uptrend'
-        elif strong_downtrend:
+        
+        # Strong downtrend
+        if (ema10 < ema21 < ema50 and 
+            current_price < ema10 < ema21 and 
+            current_price < price_5_ago * 0.999):
             return 'strong_downtrend'
-        else:
-            return 'neutral'
+        
+        return 'neutral'
     
     def _is_cooldown_active(self):
-        """Check if cooldown period is still active"""
+        """Check if cooldown period is active"""
         if not self.last_signal_time:
             return False
-        
         elapsed = (datetime.now() - self.last_signal_time).total_seconds()
         return elapsed < self.config['cooldown_seconds']
     
     def generate_signal(self, data):
-        """Generate trading signals based on trend and indicators"""
+        """Generate trading signals"""
         if len(data) < 50 or self._is_cooldown_active():
             return None
         
@@ -98,31 +94,50 @@ class RSIMFIStrategy:
         trend = self.detect_trend(data)
         price = data['close'].iloc[-1]
         
-        signal = None
-        
         # Generate signals based on trend
+        signal = None
         if trend == 'strong_uptrend' and rsi <= self.config['uptrend_oversold'] and mfi <= 50:
-            signal = {'action': 'BUY', 'trend': trend, 'rsi': rsi, 'mfi': mfi, 'price': price}
-            print(f"🟢 UPTREND BUY: RSI:{rsi:.1f} MFI:{mfi:.1f}")
-        
+            signal = self._create_signal('BUY', trend, rsi, mfi, price, data)
         elif trend == 'strong_downtrend' and rsi >= self.config['downtrend_overbought'] and mfi >= 50:
-            signal = {'action': 'SELL', 'trend': trend, 'rsi': rsi, 'mfi': mfi, 'price': price}
-            print(f"🔴 DOWNTREND SELL: RSI:{rsi:.1f} MFI:{mfi:.1f}")
-        
+            signal = self._create_signal('SELL', trend, rsi, mfi, price, data)
         elif trend == 'neutral':
             if rsi <= self.config['neutral_oversold'] and mfi <= 25:
-                signal = {'action': 'BUY', 'trend': trend, 'rsi': rsi, 'mfi': mfi, 'price': price}
+                signal = self._create_signal('BUY', trend, rsi, mfi, price, data)
             elif rsi >= self.config['neutral_overbought'] and mfi >= 75:
-                signal = {'action': 'SELL', 'trend': trend, 'rsi': rsi, 'mfi': mfi, 'price': price}
+                signal = self._create_signal('SELL', trend, rsi, mfi, price, data)
         
         if signal:
             self.last_signal_time = datetime.now()
-            print(f"🎯 {signal['action']} | TREND: {trend}")
         
         return signal
     
+    def _create_signal(self, action, trend, rsi, mfi, price, data):
+        """Create signal with structure stop"""
+        window = data.tail(50)
+        
+        if action == 'BUY':
+            structure_stop = window['low'].min() * 0.998
+            level = window['low'].min()
+            signal_type = f"{trend}_buy"
+        else:
+            structure_stop = window['high'].max() * 1.002
+            level = window['high'].max()
+            signal_type = f"{trend}_sell"
+        
+        return {
+            'action': action,
+            'trend': trend,
+            'rsi': rsi,
+            'mfi': mfi,
+            'price': price,
+            'structure_stop': structure_stop,
+            'level': level,
+            'signal_type': signal_type,
+            'confidence': min(95, max(70, abs(50 - rsi) + abs(50 - mfi)))
+        }
+    
     def calculate_indicators(self, data):
-        """Calculate all indicators for compatibility"""
+        """Calculate all indicators"""
         if len(data) < max(self.config['rsi_length'], self.config['mfi_length']) + 1:
             return {}
         
@@ -130,13 +145,12 @@ class RSIMFIStrategy:
             rsi = self.calculate_rsi(data['close'])
             mfi = self.calculate_mfi(data['high'], data['low'], data['close'], data['volume'])
             return {'rsi': rsi, 'mfi': mfi}
-        except Exception as e:
-            print(f"❌ Indicators calculation error: {e}")
+        except:
             return {}
     
     def get_strategy_info(self):
-        """Get strategy info for compatibility"""
+        """Get strategy info"""
         return {
-            'name': '100% Win Rate Trend Following Strategy',
+            'name': 'RSI/MFI Trend Following',
             'config': self.config
         }
