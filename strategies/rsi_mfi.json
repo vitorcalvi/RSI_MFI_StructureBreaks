@@ -1,25 +1,18 @@
 {
-  "rsi_length": 7,
-  "mfi_length": 7,
-  "trend_ema_length": 14,
-
-  "uptrend_oversold": 50,
-  "uptrend_overbought": 50,
-
-  "downtrend_oversold": 35,
+  "rsi_length": 14,
+  "mfi_length": 14,
+  "uptrend_oversold": 40,
   "downtrend_overbought": 50,
-
-  "structure_lookback": 50,
-  "structure_buffer_pct": 0.001,
+  "neutral_oversold": 25,
+  "neutral_overbought": 75,
+  "cooldown_seconds": 5,
   "fixed_risk_pct": 0.005,
-  "reward_ratio": 1.2,
-  "profit_lock_threshold": 1.0,
-  "trailing_stop_pct": 0.001,
+  "reward_ratio": 1.5,
+  "max_position_time": 121,
+  "emergency_stop_pct": 0.02,
+  "profit_lock_threshold": 0.003,
+  "trailing_stop_pct": 0.005,
   "entry_fee_pct": 0.00055,
   "exit_fee_pct": 0.00055,
-  "max_position_time": 180,
-  "cooldown_seconds": 10,
-  "emergency_stop_pct": 0.002,
-  "min_profit_distance": 0.001,
   "min_balance": 10
 }
