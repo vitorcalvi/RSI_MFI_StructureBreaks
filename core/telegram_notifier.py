@@ -48,7 +48,7 @@ class TelegramNotifier:
         await self.send_message(message)
 
     async def send_trade_exit(self, exit_data, price, pnl, duration, strategy_info):
-        emoji = "🔴 LOSS?" if pnl >= 0 else "🟢 WIN?"
+        emoji = "🟢 WIN" if pnl >= 0 else "🔴 LOSS"
         pnl_text = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
         trigger = exit_data.get("trigger", "").replace('_', ' ').title()
 
@@ -67,20 +67,20 @@ class TelegramNotifier:
         await self.send_message(message)
 
     async def send_bot_status(self, status: str, message_text: str = ""):
-        headline = {
+        headlines = {
             'started': '🚀 BOT STARTED',
             'stopped': '🛑 BOT STOPPED',
             'error': '❌ ERROR',
             'warning': '⚠️ WARNING'
-        }.get(status.lower(), '📊 BOT STATUS')
-
+        }
+        headline = headlines.get(status.lower(), '📊 BOT STATUS')
         extra = f"\n🗒 <b>Message:</b> {message_text}" if message_text else ""
 
         message = f"""
 <b>{headline}</b>
 
 <b>🔹 Symbol:</b> {self.symbol}
-<b>🧠 Strategy:</b> RSI + MFI{extra}
+<b>🧠 Strategy:</b> RSI + MFI (Fixed $10K){extra}
 
 🕒 <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
 """

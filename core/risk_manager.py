@@ -5,18 +5,17 @@ load_dotenv()
 
 class RiskManager:
     def __init__(self):
-        # Hard-coded risk management parameters
         self.config = {
-    'fixed_risk_pct': 0.002,           # Reduced from 0.5% to 0.2%
-    'reward_ratio': 2.5,               # Increased from 1.5 to 2.5
-    'max_position_time': 75,           # Reduced from 121s to 75s
-    'emergency_stop_pct': 0.006,       # Reduced from 2% to 0.6%
-    'profit_lock_threshold': 0.001,    # Reduced from 0.3% to 0.1%
-    'trailing_stop_pct': 0.0015,       # Reduced from 0.5% to 0.15%
-    'entry_fee_pct': 0.00055,          # Keep same
-    'exit_fee_pct': 0.00055,           # Keep same
-    'min_balance': 10                  # Keep same
-}
+            'fixed_position_usdt': 10000.0,    # CRITICAL: DO NOT MODIFY THIS FUNCTION
+            'reward_ratio': 2.5,
+            'max_position_time': 75,
+            'emergency_stop_pct': 0.006,
+            'profit_lock_threshold': 0.001,
+            'trailing_stop_pct': 0.0015,
+            'entry_fee_pct': 0.00055,
+            'exit_fee_pct': 0.00055,
+            'min_balance': 10
+        }
         
         self.symbol = os.getenv('TRADING_SYMBOL')
     
@@ -35,23 +34,15 @@ class RiskManager:
         return True, "Valid"
     
     def calculate_position_size(self, balance, entry_price, stop_price):
-        """Calculate position size based on risk"""
+        """Calculate position size based on fixed USDT amount"""
         if balance <= 0 or entry_price <= 0 or stop_price <= 0:
             return 0
         
-        risk_amount = balance * self.config['fixed_risk_pct']
-        price_diff = abs(entry_price - stop_price)
+        # Use fixed position size instead of percentage-based risk
+        position_usdt = min(self.config['fixed_position_usdt'], balance * 0.5)  # Cap at 50% of balance
+        position_size = position_usdt / entry_price
         
-        if price_diff <= 0:
-            return 0
-        
-        total_fees = self.config['entry_fee_pct'] + self.config['exit_fee_pct']
-        position_size = (risk_amount / price_diff) / (1 + total_fees)
-        position_size = round(position_size, 3)
-        
-        # Cap at 10% of balance
-        max_size = balance * 0.1 / entry_price
-        return min(max(position_size, 0), max_size)
+        return round(max(position_size, 0), 3)
     
     def should_close_position(self, current_price, entry_price, side, unrealized_pnl, position_age_seconds):
         """Determine if position should be closed"""

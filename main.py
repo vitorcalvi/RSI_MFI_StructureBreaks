@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 High-Frequency Crypto Scalping Bot
-RSI + MFI Strategy with $20 Profit Target
+RSI + MFI Strategy with Fixed $10,000 USDT Position Size
 """
 
 import asyncio
@@ -72,13 +72,13 @@ class HFScalpingBot:
         print(f"📊 Strategy: {strategy_info['name']}")
         print(f"📈 RSI({strategy_info['config']['rsi_length']}) + MFI({strategy_info['config']['mfi_length']})")
         print(f"⏱️ Max Hold: {risk_config['max_position_time']}s")
-        print(f"💰 Risk: {risk_config['fixed_risk_pct']*100}%")
+        print(f"💰 Position Size: ${risk_config['fixed_position_usdt']:,.0f} USDT")
         print(f"🎯 Reward: {risk_config['reward_ratio']}:1")
         print(f"💵 Balance: ${balance:,.2f}")
         print(f"🎯 PROFIT TARGET: ${self.profit_target:.2f}")
         print("-" * 60)
         
-        await self.engine.notifier.send_bot_status("started", "HF Scalping Mode Active")
+        await self.engine.notifier.send_bot_status("started", "HF Scalping Mode Active - Fixed $10K")
     
     async def _shutdown(self):
         """Shutdown bot"""

@@ -76,13 +76,6 @@ class RSIMFIStrategy:
         
         return 'neutral'
     
-    def _is_cooldown_active(self):
-        """Check if cooldown period is active"""
-        if not self.last_signal_time:
-            return False
-        elapsed = (datetime.now() - self.last_signal_time).total_seconds()
-        return elapsed < self.config['cooldown_seconds']
-    
     def generate_signal(self, data):
         """Generate trading signals"""
         if len(data) < 50 or self._is_cooldown_active():
@@ -135,6 +128,13 @@ class RSIMFIStrategy:
             'signal_type': signal_type,
             'confidence': min(95, max(70, abs(50 - rsi) + abs(50 - mfi)))
         }
+    
+    def _is_cooldown_active(self):
+        """Check if cooldown period is active"""
+        if not self.last_signal_time:
+            return False
+        elapsed = (datetime.now() - self.last_signal_time).total_seconds()
+        return elapsed < self.config['cooldown_seconds']
     
     def calculate_indicators(self, data):
         """Calculate all indicators"""

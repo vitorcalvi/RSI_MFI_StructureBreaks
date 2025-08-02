@@ -68,10 +68,7 @@ class TradeEngine:
             )
             
             info = self.exchange.get_server_time()
-            if info.get('retCode') != 0:
-                return False
-            
-            return True
+            return info.get('retCode') == 0
         except:
             return False
     
@@ -109,21 +106,6 @@ class TradeEngine:
                 f.write(log_line + "\n")
         except:
             pass
-    
-    def _track_exit_reason(self, reason):
-        """Track exit reason"""
-        if 'profit_target' in reason:
-            self.exit_reasons['profit_target_$20'] += 1
-        elif reason in self.exit_reasons:
-            self.exit_reasons[reason] += 1
-        else:
-            reason_map = {
-                'max_hold_time_exceeded': 'max_hold_time',
-                'Bot shutdown': 'bot_shutdown',
-                'Manual': 'manual_exit'
-            }
-            tracked_reason = reason_map.get(reason, 'manual_exit')
-            self.exit_reasons[tracked_reason] += 1
     
     async def run_cycle(self):
         """Run one trading cycle"""
@@ -285,6 +267,21 @@ class TradeEngine:
         except:
             pass
     
+    def _track_exit_reason(self, reason):
+        """Track exit reason"""
+        if 'profit_target' in reason:
+            self.exit_reasons['profit_target_$20'] += 1
+        elif reason in self.exit_reasons:
+            self.exit_reasons[reason] += 1
+        else:
+            reason_map = {
+                'max_hold_time_exceeded': 'max_hold_time',
+                'Bot shutdown': 'bot_shutdown',
+                'Manual': 'manual_exit'
+            }
+            tracked_reason = reason_map.get(reason, 'manual_exit')
+            self.exit_reasons[tracked_reason] += 1
+    
     async def get_account_balance(self):
         """Get account balance"""
         try:
@@ -308,7 +305,7 @@ class TradeEngine:
             self._track_exit_reason('position_closed')
             self._log_trade("EXIT", price, reason="position_closed", pnl=pnl)
     
-    # CRITICAL: DO NOT MODIFY THIS FUNCTION
+    # CRITICAL: DO NOT MODIFY THIS FUNCTION: DO NOT EDIT THIS
     def _display_status(self):
         """Display status """
         try:
@@ -320,15 +317,13 @@ class TradeEngine:
             
             print("\n" * 50)  # Clear screen
             
-            
-            
             w = 77
             print(f"{'='*w}\n⚡  {symbol_display} HIGH-FREQUENCY SCALPING BOT\n{'='*w}\n")
             c = self.strategy.config; er = self.exit_reasons
 
             print("⚙️  STRATEGY SETUP\n" + "─"*w)
-            print(f"📊 RSI({c['rsi_length']}) MFI({c['mfi_length']}) │ 🔥 Cooldown: {c['cooldown_seconds']}s  │ ⚡ Mode: ULTRA-AGGRESSIVE")
-            print(f"📈 Uptrend: ≤{c['uptrend_oversold']}  │ 📉 Downtrend: ≥{c['downtrend_overbought']} │ ⚖️ Neutral: {c['neutral_oversold']}-{c['neutral_overbought']}")
+            print(f"📊 RSI({c['rsi_length']}) MFI({c['mfi_length']}) │ 🔥 Cooldown: {c['cooldown_seconds']}s  │ ⚡ Mode: FIXED-SIZE")
+            print(f"💰 Position Size: $10,000 USDT │ 📈 Uptrend: ≤{c['uptrend_oversold']}  │ 📉 Downtrend: ≥{c['downtrend_overbought']}")
             print("─"*w + "\n")
 
             print("📊  EXIT REASONS SUMMARY\n" + "─"*w)
