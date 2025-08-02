@@ -323,16 +323,25 @@ class TradeEngine:
             print(f"⚡  {symbol_display} HIGH-FREQUENCY SCALPING BOT")
             print("=" * 60)
             print()
+            print("⚙️  STRATEGY SETUP")
+            print("─" * 77)
+            config = self.strategy.config
+            print(f"📊 RSI({config['rsi_length']}) MFI({config['mfi_length']}) │ "
+                  f"🔥 Cooldown: {config['cooldown_seconds']}s │ "
+                  f"⚡ Mode: ULTRA-AGGRESSIVE")
+            print(f"📈 Uptrend: ≤{config['uptrend_oversold']} │ "
+                  f"📉 Downtrend: ≥{config['downtrend_overbought']} │ "
+                  f"⚖️ Neutral: {config['neutral_oversold']}-{config['neutral_overbought']}")
+            print("─" * 77)
+            print()
             print("📊  EXIT REASONS SUMMARY")
             print("─" * 77)
             print(f"🎯 profit_target_$20 : {self.exit_reasons['profit_target_$20']:2d} │ "
                   f"🚨 emergency_stop : {self.exit_reasons['emergency_stop']:2d} │ "
                   f"⏰ max_hold_time : {self.exit_reasons['max_hold_time']:2d}")
             print(f"💰 profit_lock       : {self.exit_reasons['profit_lock']:2d} │ "
-                  f"📉 trailing_stop  : {self.exit_reasons['trailing_stop']:2d} │ "
+                  f"📉 trailing_stop    : {self.exit_reasons['trailing_stop']:2d} │ "
                   f"🔄 position_closed : {self.exit_reasons['position_closed']:2d}")
-            print(f"🛑 bot_shutdown      : {self.exit_reasons['bot_shutdown']:2d} │ "
-                  f"✋ manual_exit    : {self.exit_reasons['manual_exit']:2d}")
             print("─" * 77)
             print()
             
