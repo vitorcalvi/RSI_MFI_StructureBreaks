@@ -328,40 +328,41 @@ class TradeEngine:
             'momentum_20m': momentum_20,
             'volume_strength': min(100, max(0, vol_momentum))
         }
-    
     def _display_status(self):
         """Display enhanced status with market momentum"""
         try:
             price = float(self.price_data['close'].iloc[-1])
             time = self.price_data.index[-1].strftime('%H:%M:%S')
-            
             symbol_display = self.symbol.replace('USDT', '/USDT')
             price_formatted = f"{price:,.2f}".replace(',', ' ')
             
             print("\n" * 50)
             
+            # Header
             w = 77
             print(f"{'='*w}\n⚡  {symbol_display} HIGH-FREQUENCY SCALPING BOT\n{'='*w}\n")
-            c = self.strategy.config
-            er = self.exit_reasons
-
+            
+            # Strategy setup
+            c, er = self.strategy.config, self.exit_reasons
             print("⚙️  STRATEGY SETUP\n" + "─"*w)
             print(f"📊 RSI({c['rsi_length']}) MFI({c['mfi_length']}) │ 🔥 Cooldown: {c['cooldown_seconds']}s  │ ⚡ Mode: FIXED-SIZE")
             print(f"💰 Position Size: $10,000 USDT │ 📈 Uptrend: ≤{c['uptrend_oversold']}  │ 📉 Downtrend: ≥{c['downtrend_overbought']}")
             print("─"*w + "\n")
 
-            # Market Momentum Section
+            # Market momentum
             momentum = self._calculate_momentum()
             print("📈  MARKET MOMENTUM\n" + "─"*w)
             print(f"🎯 Trend: {momentum['trend']:<8} │ 💪 Strength: {momentum['strength']:>3.0f}% │ {momentum['direction']} Direction")
             print(f"⚡ 5min: {momentum['momentum_5m']:>+5.2f}% │ 📊 20min: {momentum['momentum_20m']:>+5.2f}% │ 📈 Volume: {momentum['volume_strength']:>3.0f}%")
             print("─"*w + "\n")
 
+            # Exit reasons
             print("📊  EXIT REASONS SUMMARY\n" + "─"*w)
             print(f"🎯 profit_target_$20 : {er['profit_target_$20']:2d} │ 🚨 emergency_stop : {er['emergency_stop']:2d} │ ⏰ max_hold_time   : {er['max_hold_time']:2d}")
             print(f"💰 profit_lock       : {er['profit_lock']:2d} │ 📉 trailing_stop  : {er['trailing_stop']:2d} │ 🔄 position_closed : {er['position_closed']:2d}")
             print("─"*w + "\n")
 
+            # Current status
             print(f"⏰ {time}   |   💰 ${price_formatted}")
             
             if len(self.price_data) > 10:
@@ -373,6 +374,7 @@ class TradeEngine:
             
             print()
             
+            # Position info
             if self.position:
                 pnl = float(self.position.get('unrealisedPnl', 0))
                 entry = float(self.position.get('avgPrice', 0))

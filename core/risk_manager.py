@@ -6,22 +6,28 @@ load_dotenv()
 class RiskManager:
     """
     ETH/USDT Scalping Risk Manager - Optimized for $3,500 price level
-    
+
     Config Reasoning:
-    - 9091 USDT: ~2.59 ETH position at $3,507 - optimal for $8-15 moves
-    - 10 USDT threshold: Market fee 0.11% = ~10 USDT, covers fees + profit  
+    - 9091 USDT: ~2.59 ETH position at $3,507 - optimal for $8-15 moves  
+    - 15 USDT threshold: Actual Bybit fees 0.055% = $10 round-trip + $5 profit
     - 180s max hold: RSI signals on 1-min complete in 1-3 minutes
     - 0.6% emergency stop: Limits max loss to ~55 USDT on 9091 position
+
+    Fee Structure:
+    - Bybit Futures: 0.02% maker / 0.055% taker (not 0.11%)
+    - Round-trip cost: $10 USDT (entry + exit using market orders)
+    - Net profit per trade: $5+ after fees with current threshold
     """
-    
+
     def __init__(self):
+        # ETH/USDT Scalping Configuration - Optimized for actual Bybit fees
         self.config = {
-            'fixed_position_usdt': 9091,        # Optimized for ETH ~$3,507 level
-            'fixed_break_even_threshold': 10,   # Market fee 0.11% coverage  
-            'leverage': 10,
-            'reward_ratio': 1.5,
-            'max_position_time': 180,           # 3min max hold for 1-min signals
-            'emergency_stop_pct': 0.006         # 0.6% emergency stop
+            'fixed_position_usdt': 9091,        # ~2.59 ETH position size
+            'fixed_break_even_threshold': 15,   # Covers $10 fees + $5 profit (optimized)
+            'leverage': 10,                     
+            'reward_ratio': 1.5,               
+            'max_position_time': 180,          
+            'emergency_stop_pct': 0.006        
         }
         self.symbol = os.getenv('TRADING_SYMBOL')
     

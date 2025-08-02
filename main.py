@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-High-Frequency Crypto Scalping Bot - Streamlined
-RSI + MFI Strategy with Fixed $10,000 USDT Position Size
+    ETH/USDT Scalping Risk Manager - Optimized for $3,500 price level
+    
+    Config Reasoning:
+    - 9091 USDT: ~2.59 ETH position at $3,507 - optimal for $8-15 moves
+    - 10 USDT threshold: Market fee 0.11% = ~10 USDT, covers fees + profit  
+    - 180s max hold: RSI signals on 1-min complete in 1-3 minutes
+    - 0.6% emergency stop: Limits max loss to ~55 USDT on 9091 position
 """
 
 import asyncio
