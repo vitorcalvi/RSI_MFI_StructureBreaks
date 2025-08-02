@@ -7,12 +7,13 @@ class RiskManager:
     def __init__(self):
         self.config = {
             'fixed_position_usdt': 10000.0,
+            'leverage': 10,
             'reward_ratio': 2.5,
             'max_position_time': 75,
-            'emergency_stop_pct': 0.006,
             'fixed_profit_lock_threshold': 11,
             'entry_fee_pct': 0.00055,
-            'exit_fee_pct': 0.00055
+            'exit_fee_pct': 0.00055,
+            'emergency_stop_pct': 0.006
         }
         self.symbol = os.getenv('TRADING_SYMBOL')
     
@@ -54,3 +55,7 @@ class RiskManager:
             return True, "profit_lock"
         
         return False, "hold"
+    
+    def get_leverage(self):
+        """Get leverage setting"""
+        return self.config['leverage']

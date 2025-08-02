@@ -68,9 +68,27 @@ class TradeEngine:
                 api_secret=self.api_secret
             )
             info = self.exchange.get_server_time()
-            return info.get('retCode') == 0
+            
+            if info.get('retCode') == 0:
+                # Set leverage
+                self._set_leverage()
+                return True
+            return False
         except:
             return False
+    
+    def _set_leverage(self):
+        """Set leverage for the symbol"""
+        try:
+            leverage = self.risk_manager.get_leverage()
+            self.exchange.set_leverage(
+                category="linear",
+                symbol=self.symbol,
+                buyLeverage=str(leverage),
+                sellLeverage=str(leverage)
+            )
+        except:
+            pass
     
     def format_quantity(self, qty):
         """Format quantity according to exchange rules"""
@@ -315,7 +333,7 @@ class TradeEngine:
 
             print("⚙️  STRATEGY SETUP\n" + "─"*w)
             print(f"📊 RSI({c['rsi_length']}) MFI({c['mfi_length']}) │ 🔥 Cooldown: {c['cooldown_seconds']}s  │ ⚡ Mode: FIXED-SIZE")
-            print(f"💰 Position Size: $10,000 USDT │ 📈 Uptrend: ≤{c['uptrend_oversold']}  │ 📉 Downtrend: ≥{c['downtrend_overbought']}")
+            print(f"💰 Position Size: $10,000 USDT │ 🔺 Leverage: {self.risk_manager.get_leverage()}x │ 📈 Uptrend: ≤{c['uptrend_oversold']}  │ 📉 Downtrend: ≥{c['downtrend_overbought']}")
             print("─"*w + "\n")
 
             print("📊  EXIT REASONS SUMMARY\n" + "─"*w)
