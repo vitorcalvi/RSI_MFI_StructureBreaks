@@ -5,18 +5,18 @@ from datetime import datetime
 class RSIMFIStrategy:
     def __init__(self):
         self.config = {
-            "rsi_length": 3,
+            "rsi_length": 2,                    # 3 → 2 (faster response)
             "mfi_length": 3,
-            "uptrend_oversold": 48,
-            "downtrend_overbought": 52,
+            "uptrend_oversold": 48,             # Keep exactly as requested
+            "downtrend_overbought": 52,         # Keep exactly as requested
             "neutral_oversold": 45,
             "neutral_overbought": 55,
-            "cooldown_seconds": 1
+            "cooldown_seconds": 0.5             # 1s → 0.5s (faster signals)
         }
         self.last_signal_time = None
     
     def calculate_rsi(self, prices):
-        """Calculate RSI indicator"""
+        """Calculate RSI indicator - streamlined"""
         period = self.config['rsi_length']
         if len(prices) < period + 1:
             return pd.Series(50.0, index=prices.index)
@@ -28,7 +28,7 @@ class RSIMFIStrategy:
         return (100 - 100 / (1 + rs)).fillna(50.0).clip(0, 100)
     
     def calculate_mfi(self, high, low, close, volume):
-        """Calculate Money Flow Index"""
+        """Calculate Money Flow Index - streamlined"""
         period = self.config['mfi_length']
         if len(close) < period + 1:
             return pd.Series(50.0, index=close.index)
@@ -43,27 +43,24 @@ class RSIMFIStrategy:
         return (100 - 100 / (1 + mfi_ratio)).fillna(50.0).clip(0, 100)
     
     def detect_trend(self, data):
-        """Detect market trend using EMAs"""
+        """Detect market trend - simplified logic"""
         if len(data) < 50:
             return 'neutral'
         
         close = data['close']
-        ema10 = close.ewm(span=10).mean().iloc[-1]
-        ema21 = close.ewm(span=21).mean().iloc[-1]
-        ema50 = close.ewm(span=50).mean().iloc[-1]
-        current_price = close.iloc[-1]
-        price_5_ago = close.iloc[-5]
+        ema10, ema21, ema50 = close.ewm(span=10).mean().iloc[-1], close.ewm(span=21).mean().iloc[-1], close.ewm(span=50).mean().iloc[-1]
+        current_price, price_5_ago = close.iloc[-1], close.iloc[-5]
         
-        # Strong trends
-        if (ema10 > ema21 > ema50 and current_price > ema10 > ema21 and current_price > price_5_ago * 1.001):
+        # Streamlined trend detection
+        if ema10 > ema21 > ema50 and current_price > ema10 and current_price > price_5_ago * 1.001:
             return 'strong_uptrend'
-        if (ema10 < ema21 < ema50 and current_price < ema10 < ema21 and current_price < price_5_ago * 0.999):
+        if ema10 < ema21 < ema50 and current_price < ema10 and current_price < price_5_ago * 0.999:
             return 'strong_downtrend'
         
         return 'neutral'
     
     def generate_signal(self, data):
-        """Generate trading signals"""
+        """Generate trading signals - streamlined with aggressive MFI thresholds"""
         if len(data) < 50 or self._is_cooldown_active():
             return None
         
@@ -72,10 +69,11 @@ class RSIMFIStrategy:
         trend = self.detect_trend(data)
         price = data['close'].iloc[-1]
         
+        # Streamlined signal generation with aggressive MFI (30/70 thresholds)
         signal = None
-        if trend == 'strong_uptrend' and rsi <= self.config['uptrend_oversold'] and mfi <= 50:
+        if trend == 'strong_uptrend' and rsi <= self.config['uptrend_oversold'] and mfi <= 70:  # 50 → 70
             signal = self._create_signal('BUY', trend, rsi, mfi, price, data)
-        elif trend == 'strong_downtrend' and rsi >= self.config['downtrend_overbought'] and mfi >= 50:
+        elif trend == 'strong_downtrend' and rsi >= self.config['downtrend_overbought'] and mfi >= 30:  # 50 → 30
             signal = self._create_signal('SELL', trend, rsi, mfi, price, data)
         elif trend == 'neutral':
             if rsi <= self.config['neutral_oversold'] and mfi <= 25:
@@ -89,14 +87,15 @@ class RSIMFIStrategy:
         return signal
     
     def _create_signal(self, action, trend, rsi, mfi, price, data):
-        """Create signal with structure stop"""
+        """Create signal with tighter structure stops for scalping"""
         window = data.tail(50)
         
+        # Tighter stops: 0.998/1.002 → 0.9985/1.0015
         if action == 'BUY':
-            structure_stop = window['low'].min() * 0.998
+            structure_stop = window['low'].min() * 0.9985
             level = window['low'].min()
         else:
-            structure_stop = window['high'].max() * 1.002
+            structure_stop = window['high'].max() * 1.0015
             level = window['high'].max()
         
         return {
@@ -107,24 +106,24 @@ class RSIMFIStrategy:
         }
     
     def _is_cooldown_active(self):
-        """Check if cooldown period is active"""
+        """Check cooldown - streamlined"""
         if not self.last_signal_time:
             return False
-        elapsed = (datetime.now() - self.last_signal_time).total_seconds()
-        return elapsed < self.config['cooldown_seconds']
+        return (datetime.now() - self.last_signal_time).total_seconds() < self.config['cooldown_seconds']
     
     def calculate_indicators(self, data):
-        """Calculate all indicators"""
+        """Calculate indicators - streamlined"""
         if len(data) < max(self.config['rsi_length'], self.config['mfi_length']) + 1:
             return {}
         
         try:
-            rsi = self.calculate_rsi(data['close'])
-            mfi = self.calculate_mfi(data['high'], data['low'], data['close'], data['volume'])
-            return {'rsi': rsi, 'mfi': mfi}
+            return {
+                'rsi': self.calculate_rsi(data['close']),
+                'mfi': self.calculate_mfi(data['high'], data['low'], data['close'], data['volume'])
+            }
         except:
             return {}
     
     def get_strategy_info(self):
-        """Get strategy info"""
+        """Get strategy info - streamlined"""
         return {'name': 'RSI/MFI Trend Following', 'config': self.config}
