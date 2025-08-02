@@ -38,6 +38,12 @@ class TradeEngine:
             'bot_shutdown': 0, 'manual_exit': 0
         }
         
+        # Track signal rejections for debugging
+        self.rejections = {
+            'extreme_rsi': 0, 'extreme_mfi': 0, 'zero_volume': 0,
+            'counter_trend': 0, 'low_confidence': 0, 'total_signals': 0
+        }
+        
         self._set_symbol_rules()
         os.makedirs("logs", exist_ok=True)
         self.log_file = "logs/trades.log"
@@ -80,10 +86,14 @@ class TradeEngine:
         close = self.price_data['close']
         volume = self.price_data['volume']
         
-        # Get indicators
+        # Get indicators with validation
         indicators = self.strategy.calculate_indicators(self.price_data)
         rsi = indicators.get('rsi', pd.Series([50])).iloc[-1] if 'rsi' in indicators else 50
         mfi = indicators.get('mfi', pd.Series([50])).iloc[-1] if 'mfi' in indicators else 50
+        
+        # Fix impossible indicator values
+        rsi = max(0, min(100, rsi)) if pd.notna(rsi) else 50
+        mfi = max(0, min(100, mfi)) if pd.notna(mfi) else 50
         
         # Calculate momentum and volatility
         returns = close.pct_change().tail(10)
@@ -91,9 +101,14 @@ class TradeEngine:
         momentum_5m = ((close.iloc[-1] - close.iloc[-5]) / close.iloc[-5]) * 100
         momentum_20m = ((close.iloc[-1] - close.iloc[-20]) / close.iloc[-20]) * 100
         
-        # Volume ratio
+        # Volume ratio with validation
         vol_avg = volume.tail(20).mean()
-        volume_ratio = volume.iloc[-1] / vol_avg if vol_avg > 0 else 1
+        current_vol = volume.iloc[-1]
+        volume_ratio = current_vol / vol_avg if vol_avg > 0 and current_vol > 0 else 1
+        
+        # Reject trades with zero volume
+        if current_vol == 0 or vol_avg == 0:
+            volume_ratio = 0  # Signal invalid volume
         
         # Trend determination
         if abs(momentum_5m) > 2 or abs(momentum_20m) > 5:
@@ -162,6 +177,7 @@ class TradeEngine:
         if not self.position:
             signal = self.strategy.generate_signal(self.price_data)
             if signal:
+                self.rejections['total_signals'] += 1
                 await self._execute_trade(signal)
         
         self._display_status()
@@ -230,13 +246,21 @@ class TradeEngine:
             await self._close_position(reason)
     
     async def _execute_trade(self, signal):
-        """Execute trade"""
+        """Execute trade with enhanced validation"""
         current_price = float(self.price_data['close'].iloc[-1])
         balance = await self.get_account_balance()
+        market_data = self._get_market_data()
         
         if not balance:
             return
         
+        # Enhanced signal validation
+        is_valid, reason = self._validate_enhanced_signal(signal, market_data, current_price)
+        if not is_valid:
+            print(f"❌ Trade rejected: {reason}")
+            return
+        
+        # Original risk manager validation
         is_valid, _ = self.risk_manager.validate_trade(signal, balance, current_price)
         if not is_valid:
             return
@@ -259,6 +283,44 @@ class TradeEngine:
                 await self.notifier.send_trade_entry(signal, current_price, formatted_qty, self.strategy.get_strategy_info())
         except:
             pass
+    
+    def _validate_enhanced_signal(self, signal, market_data, current_price):
+        """Enhanced signal validation to prevent bad entries"""
+        rsi = signal.get('rsi', 50)
+        mfi = signal.get('mfi', 50)
+        side = signal.get('action', '')
+        
+        # Reject extreme RSI values (likely calculation errors)
+        if rsi < 5 or rsi > 95:
+            self.rejections['extreme_rsi'] += 1
+            return False, f"Extreme RSI {rsi:.1f}"
+        
+        # Reject extreme MFI values
+        if mfi < 5 or mfi > 95:
+            self.rejections['extreme_mfi'] += 1
+            return False, f"Extreme MFI {mfi:.1f}"
+        
+        # Reject zero volume conditions
+        if market_data['volume_ratio'] == 0:
+            self.rejections['zero_volume'] += 1
+            return False, "Zero volume detected"
+        
+        # Prevent counter-trend entries (basic sanity check)
+        if side == 'SELL' and rsi < 60:  # Don't short when RSI < 60
+            self.rejections['counter_trend'] += 1
+            return False, f"RSI {rsi:.1f} too low for short"
+        
+        if side == 'BUY' and rsi > 40:   # Don't buy when RSI > 40  
+            self.rejections['counter_trend'] += 1
+            return False, f"RSI {rsi:.1f} too high for long"
+        
+        # Require reasonable confidence
+        confidence = signal.get('confidence', 0)
+        if confidence < 70:
+            self.rejections['low_confidence'] += 1
+            return False, f"Low confidence {confidence:.1f}"
+        
+        return True, "Valid"
     
     async def _close_position(self, reason="Manual"):
         """Close position"""
@@ -374,10 +436,16 @@ class TradeEngine:
             print(f"⚡ 5min: {market_data['momentum_5m']:>+5.2f}% │ 📊 20min: {market_data['momentum_20m']:>+5.2f}% │ 📈 Volume: {market_data['volume_strength']:>3.0f}%")
             print("─"*w + "\n")
 
-            # Exit reasons
-            print("📊  EXIT REASONS SUMMARY\n" + "─"*w)
+            # Exit reasons and rejections
+            print("📊  EXIT REASONS & SIGNAL FILTERS\n" + "─"*w)
             print(f"🎯 profit_target_$20 : {er['profit_target_$20']:2d} │ 🚨 emergency_stop : {er['emergency_stop']:2d} │ ⏰ max_hold_time   : {er['max_hold_time']:2d}")
             print(f"💰 profit_lock       : {er['profit_lock']:2d} │ 📉 trailing_stop  : {er['trailing_stop']:2d} │ 🔄 position_closed : {er['position_closed']:2d}")
+            
+            rej = self.rejections
+            if rej['total_signals'] > 0:
+                print(f"🚫 Signals rejected  : {rej['extreme_rsi']:2d} RSI │ {rej['extreme_mfi']:2d} MFI │ {rej['zero_volume']:2d} Vol │ {rej['counter_trend']:2d} Trend")
+                print(f"📈 Signal rate       : {self.trade_id}/{rej['total_signals']} accepted ({(self.trade_id/rej['total_signals']*100):.1f}%)")
+            
             print("─"*w + "\n")
 
             # Current status
