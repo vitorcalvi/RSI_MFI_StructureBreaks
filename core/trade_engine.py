@@ -2,6 +2,7 @@ import os
 import asyncio
 import pandas as pd
 import numpy as np
+import json
 from datetime import datetime
 from pybit.unified_trading import HTTP
 from dotenv import load_dotenv
@@ -43,25 +44,17 @@ class TradeEngine:
     
     def _set_symbol_rules(self):
         """Set symbol-specific trading rules"""
-        rules = {
-            'ETH': ('0.01', 0.01), 'BTC': ('0.001', 0.001), 'ADA': ('1', 1.0)
-        }
-        
+        rules = {'ETH': ('0.01', 0.01), 'BTC': ('0.001', 0.001), 'ADA': ('1', 1.0)}
         for key, (step, min_qty) in rules.items():
             if key in self.symbol:
                 self.qty_step, self.min_qty = step, min_qty
                 return
-        
         self.qty_step, self.min_qty = '1', 1.0
     
     def connect(self):
         """Connect to exchange"""
         try:
-            self.exchange = HTTP(
-                demo=self.demo_mode,
-                api_key=self.api_key,
-                api_secret=self.api_secret
-            )
+            self.exchange = HTTP(demo=self.demo_mode, api_key=self.api_key, api_secret=self.api_secret)
             return self.exchange.get_server_time().get('retCode') == 0
         except:
             return False
@@ -70,7 +63,6 @@ class TradeEngine:
         """Format quantity according to exchange rules"""
         if qty < self.min_qty:
             return "0"
-        
         try:
             decimals = len(self.qty_step.split('.')[1]) if '.' in self.qty_step else 0
             qty_step_float = float(self.qty_step)
@@ -79,28 +71,84 @@ class TradeEngine:
         except:
             return f"{qty:.3f}"
     
+    def _get_market_data(self):
+        """Get market indicators and momentum in one pass"""
+        if len(self.price_data) < 20:
+            return {'rsi': 50, 'mfi': 50, 'volatility': 0, 'momentum_5m': 0, 'momentum_20m': 0, 
+                   'volume_ratio': 1, 'trend': 'NEUTRAL', 'strength': 0, 'direction': '→'}
+        
+        close = self.price_data['close']
+        volume = self.price_data['volume']
+        
+        # Get indicators
+        indicators = self.strategy.calculate_indicators(self.price_data)
+        rsi = indicators.get('rsi', pd.Series([50])).iloc[-1] if 'rsi' in indicators else 50
+        mfi = indicators.get('mfi', pd.Series([50])).iloc[-1] if 'mfi' in indicators else 50
+        
+        # Calculate momentum and volatility
+        returns = close.pct_change().tail(10)
+        volatility = returns.std() if len(returns) > 1 else 0
+        momentum_5m = ((close.iloc[-1] - close.iloc[-5]) / close.iloc[-5]) * 100
+        momentum_20m = ((close.iloc[-1] - close.iloc[-20]) / close.iloc[-20]) * 100
+        
+        # Volume ratio
+        vol_avg = volume.tail(20).mean()
+        volume_ratio = volume.iloc[-1] / vol_avg if vol_avg > 0 else 1
+        
+        # Trend determination
+        if abs(momentum_5m) > 2 or abs(momentum_20m) > 5:
+            strength = min(100, max(abs(momentum_5m) * 20, abs(momentum_20m) * 10))
+            if momentum_5m > 0.5 and momentum_20m > 0:
+                trend, direction = 'BULLISH', '↗'
+            elif momentum_5m < -0.5 and momentum_20m < 0:
+                trend, direction = 'BEARISH', '↘'
+            else:
+                trend, direction = 'MIXED', '↕'
+        else:
+            trend, direction, strength = 'NEUTRAL', '→', 0
+        
+        # Volume strength
+        vol_momentum = ((volume.iloc[-1] - vol_avg) / vol_avg) * 100 if vol_avg > 0 else 0
+        volume_strength = min(100, max(0, vol_momentum))
+        
+        return {
+            'rsi': rsi, 'mfi': mfi, 'volatility': volatility,
+            'momentum_5m': momentum_5m, 'momentum_20m': momentum_20m, 'volume_ratio': volume_ratio,
+            'trend': trend, 'strength': strength, 'direction': direction, 'volume_strength': volume_strength
+        }
+    
     def _log_trade(self, action, price, **kwargs):
-        """Log trade"""
+        """Enhanced trade logging with market context"""
         timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        market_data = self._get_market_data()
         
         if action == "ENTRY":
             self.trade_id += 1
             signal = kwargs.get('signal', {})
-            qty = kwargs.get('quantity', '')
-            log_line = (f"{timestamp} id={self.trade_id} action=ENTRY side={signal.get('action', '')} "
-                       f"price={price:.2f} size={qty} rsi={signal.get('rsi', 0):.1f} mfi={signal.get('mfi', 0):.1f}")
+            log_data = {
+                'timestamp': timestamp, 'id': self.trade_id, 'action': 'ENTRY',
+                'side': signal.get('action', ''), 'price': round(price, 2), 'size': kwargs.get('quantity', ''),
+                'rsi': round(signal.get('rsi', 0), 1), 'mfi': round(signal.get('mfi', 0), 1),
+                'trend': signal.get('trend', 'neutral'), 'confidence': round(signal.get('confidence', 0), 1),
+                'volatility': round(market_data['volatility'], 3), 'momentum': round(market_data['momentum_5m'], 2),
+                'volume_ratio': round(market_data['volume_ratio'], 2)
+            }
         else:
             duration = (datetime.now() - self.position_start_time).total_seconds() if self.position_start_time else 0
-            reason = kwargs.get('reason', '').lower().replace(' ', '_')
-            log_line = (f"{timestamp} id={self.trade_id} action=EXIT trigger={reason} "
-                       f"price={price:.2f} pnl={kwargs.get('pnl', 0):.2f} hold_s={duration:.1f}")
+            log_data = {
+                'timestamp': timestamp, 'id': self.trade_id, 'action': 'EXIT',
+                'trigger': kwargs.get('reason', '').lower().replace(' ', '_'),
+                'price': round(price, 2), 'pnl': round(kwargs.get('pnl', 0), 2),
+                'hold_seconds': round(duration, 1), 'rsi_exit': round(market_data['rsi'], 1),
+                'mfi_exit': round(market_data['mfi'], 1)
+            }
         
         try:
             with open(self.log_file, "a") as f:
-                f.write(log_line + "\n")
+                f.write(json.dumps(log_data) + "\n")
         except:
             pass
-    
+
     async def run_cycle(self):
         """Run one trading cycle"""
         if not await self._update_market_data():
@@ -121,17 +169,13 @@ class TradeEngine:
     async def _update_market_data(self):
         """Update market data"""
         try:
-            klines = self.exchange.get_kline(
-                category="linear", symbol=self.symbol, interval="1", limit=200
-            )
-            
+            klines = self.exchange.get_kline(category="linear", symbol=self.symbol, interval="1", limit=200)
             if klines.get('retCode') != 0:
                 return False
             
             df = pd.DataFrame(klines['result']['list'], columns=[
                 'timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'
             ])
-            
             df['timestamp'] = pd.to_datetime(df['timestamp'].astype(int), unit='ms')
             for col in ['open', 'high', 'low', 'close', 'volume']:
                 df[col] = pd.to_numeric(df[col])
@@ -145,7 +189,6 @@ class TradeEngine:
         """Check position status"""
         try:
             positions = self.exchange.get_positions(category="linear", symbol=self.symbol)
-            
             if positions.get('retCode') != 0:
                 return
             
@@ -159,7 +202,6 @@ class TradeEngine:
             
             if not self.position:
                 self.position_start_time = datetime.now()
-            
             self.position = pos_list[0]
         except:
             pass
@@ -207,12 +249,9 @@ class TradeEngine:
         
         try:
             order = self.exchange.place_order(
-                category="linear",
-                symbol=self.symbol,
+                category="linear", symbol=self.symbol,
                 side="Buy" if signal['action'] == 'BUY' else "Sell",
-                orderType="Market",
-                qty=formatted_qty,
-                timeInForce="IOC"
+                orderType="Market", qty=formatted_qty, timeInForce="IOC"
             )
             
             if order.get('retCode') == 0:
@@ -228,7 +267,6 @@ class TradeEngine:
         
         current_price = float(self.price_data['close'].iloc[-1]) if len(self.price_data) > 0 else 0
         pnl = float(self.position.get('unrealisedPnl', 0))
-        
         side = "Sell" if self.position.get('side') == "Buy" else "Buy"
         qty = self.format_quantity(float(self.position['size']))
         
@@ -240,15 +278,12 @@ class TradeEngine:
             
             if order.get('retCode') == 0:
                 duration = (datetime.now() - self.position_start_time).total_seconds() if self.position_start_time else 0
-                
-                indicators = self.strategy.calculate_indicators(self.price_data)
-                current_rsi = indicators.get('rsi', pd.Series([0])).iloc[-1] if 'rsi' in indicators else 0
-                current_mfi = indicators.get('mfi', pd.Series([0])).iloc[-1] if 'mfi' in indicators else 0
+                market_data = self._get_market_data()
                 
                 self._track_exit_reason(reason)
                 self._log_trade("EXIT", current_price, reason=reason, pnl=pnl)
                 
-                exit_data = {'trigger': reason, 'rsi': current_rsi, 'mfi': current_mfi}
+                exit_data = {'trigger': reason, 'rsi': market_data['rsi'], 'mfi': market_data['mfi']}
                 await self.notifier.send_trade_exit(exit_data, current_price, pnl, duration, self.strategy.get_strategy_info())
         except:
             pass
@@ -262,22 +297,18 @@ class TradeEngine:
         else:
             reason_map = {
                 'max_hold_time_exceeded': 'max_hold_time',
-                'Bot shutdown': 'bot_shutdown',
-                'Manual': 'manual_exit'
+                'Bot shutdown': 'bot_shutdown', 'Manual': 'manual_exit'
             }
-            tracked_reason = reason_map.get(reason, 'manual_exit')
-            self.exit_reasons[tracked_reason] += 1
+            self.exit_reasons[reason_map.get(reason, 'manual_exit')] += 1
     
     async def get_account_balance(self):
         """Get account balance"""
         try:
             balance = self.exchange.get_wallet_balance(accountType="UNIFIED")
-            
             if balance.get('retCode') == 0:
                 coins = balance['result']['list'][0]['coin']
                 usdt = next((c for c in coins if c['coin'] == 'USDT'), None)
                 return float(usdt['walletBalance']) if usdt else 0
-            
             return 0
         except:
             return 0
@@ -287,47 +318,34 @@ class TradeEngine:
         if self.position:
             pnl = float(self.position.get('unrealisedPnl', 0))
             price = float(self.price_data['close'].iloc[-1]) if len(self.price_data) > 0 else 0
-            
             self._track_exit_reason('position_closed')
             self._log_trade("EXIT", price, reason="position_closed", pnl=pnl)
-    
-    def _calculate_momentum(self):
-        """Calculate market momentum indicators"""
-        if len(self.price_data) < 20:
-            return {'trend': 'NEUTRAL', 'strength': 0, 'direction': '→'}
-        
-        close = self.price_data['close']
-        
-        # Price momentum
-        momentum_5 = ((close.iloc[-1] - close.iloc[-5]) / close.iloc[-5]) * 100
-        momentum_20 = ((close.iloc[-1] - close.iloc[-20]) / close.iloc[-20]) * 100
-        
-        # Volume momentum
-        volume = self.price_data['volume']
-        vol_avg = volume.tail(20).mean()
-        vol_current = volume.iloc[-1]
-        vol_momentum = ((vol_current - vol_avg) / vol_avg) * 100 if vol_avg > 0 else 0
-        
-        # Determine trend strength
-        if abs(momentum_5) > 2 or abs(momentum_20) > 5:
-            strength = min(100, max(abs(momentum_5) * 20, abs(momentum_20) * 10))
-            if momentum_5 > 0.5 and momentum_20 > 0:
-                trend, direction = 'BULLISH', '↗'
-            elif momentum_5 < -0.5 and momentum_20 < 0:
-                trend, direction = 'BEARISH', '↘'
-            else:
-                trend, direction = 'MIXED', '↕'
-        else:
-            trend, direction, strength = 'NEUTRAL', '→', 0
-        
-        return {
-            'trend': trend,
-            'strength': strength,
-            'direction': direction,
-            'momentum_5m': momentum_5,
-            'momentum_20m': momentum_20,
-            'volume_strength': min(100, max(0, vol_momentum))
-        }
+
+    def analyze_recent_trades(self, limit=10):
+        """Quick analysis of recent trades"""
+        try:
+            with open(self.log_file, "r") as f:
+                lines = f.readlines()
+            
+            trades = []
+            for line in lines[-limit*2:]:
+                try:
+                    trades.append(json.loads(line.strip()))
+                except:
+                    continue
+            
+            exits = [t for t in trades if t['action'] == 'EXIT']
+            if not exits:
+                return
+            
+            wins = len([t for t in exits if t['pnl'] > 0])
+            avg_pnl = sum(t['pnl'] for t in exits) / len(exits)
+            avg_hold = sum(t['hold_seconds'] for t in exits) / len(exits)
+            
+            print(f"\n📊 Last {len(exits)} trades: {wins}W/{len(exits)-wins}L | Avg PnL: ${avg_pnl:.2f} | Hold: {avg_hold:.1f}s")
+        except:
+            pass
+
     def _display_status(self):
         """Display enhanced status with market momentum"""
         try:
@@ -335,6 +353,7 @@ class TradeEngine:
             time = self.price_data.index[-1].strftime('%H:%M:%S')
             symbol_display = self.symbol.replace('USDT', '/USDT')
             price_formatted = f"{price:,.2f}".replace(',', ' ')
+            market_data = self._get_market_data()
             
             print("\n" * 50)
             
@@ -350,10 +369,9 @@ class TradeEngine:
             print("─"*w + "\n")
 
             # Market momentum
-            momentum = self._calculate_momentum()
             print("📈  MARKET MOMENTUM\n" + "─"*w)
-            print(f"🎯 Trend: {momentum['trend']:<8} │ 💪 Strength: {momentum['strength']:>3.0f}% │ {momentum['direction']} Direction")
-            print(f"⚡ 5min: {momentum['momentum_5m']:>+5.2f}% │ 📊 20min: {momentum['momentum_20m']:>+5.2f}% │ 📈 Volume: {momentum['volume_strength']:>3.0f}%")
+            print(f"🎯 Trend: {market_data['trend']:<8} │ 💪 Strength: {market_data['strength']:>3.0f}% │ {market_data['direction']} Direction")
+            print(f"⚡ 5min: {market_data['momentum_5m']:>+5.2f}% │ 📊 20min: {market_data['momentum_20m']:>+5.2f}% │ 📈 Volume: {market_data['volume_strength']:>3.0f}%")
             print("─"*w + "\n")
 
             # Exit reasons
@@ -364,14 +382,7 @@ class TradeEngine:
 
             # Current status
             print(f"⏰ {time}   |   💰 ${price_formatted}")
-            
-            if len(self.price_data) > 10:
-                indicators = self.strategy.calculate_indicators(self.price_data)
-                if indicators:
-                    rsi = indicators.get('rsi', pd.Series([50])).iloc[-1]
-                    mfi = indicators.get('mfi', pd.Series([50])).iloc[-1]
-                    print(f"📈 RSI: {rsi:.1f}  |   MFI: {mfi:.1f}")
-            
+            print(f"📈 RSI: {market_data['rsi']:.1f}  |   MFI: {market_data['mfi']:.1f}")
             print()
             
             # Position info
@@ -391,6 +402,8 @@ class TradeEngine:
             else:
                 print("⚡  No Position — scanning…")
             
+            # Show quick trade analysis
+            self.analyze_recent_trades(5)
             print("─" * 60)
             
         except Exception as e:
