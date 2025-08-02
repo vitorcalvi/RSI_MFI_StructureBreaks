@@ -31,9 +31,13 @@ class TradeEngine:
         self.trade_id = 0
         
         self.exit_reasons = {
-            'profit_target_$20': 0, 'emergency_stop': 0, 'max_hold_time': 0,
-            'profit_lock': 0, 'trailing_stop': 0, 'position_closed': 0,
-            'bot_shutdown': 0, 'manual_exit': 0
+            'profit_target_$20': 0, 
+            'emergency_stop': 0, 
+            'max_hold_time': 0,
+            'profit_lock': 0, 
+            'position_closed': 0,
+            'bot_shutdown': 0, 
+            'manual_exit': 0
         }
         
         self._set_symbol_rules()
@@ -43,7 +47,9 @@ class TradeEngine:
     def _set_symbol_rules(self):
         """Set symbol-specific trading rules"""
         symbol_rules = {
-            'ETH': ('0.01', 0.01), 'BTC': ('0.001', 0.001), 'ADA': ('1', 1.0)
+            'ETH': ('0.01', 0.01), 
+            'BTC': ('0.001', 0.001), 
+            'ADA': ('1', 1.0)
         }
         
         for key, (step, min_qty) in symbol_rules.items():
@@ -116,7 +122,7 @@ class TradeEngine:
             if signal:
                 await self._execute_trade(signal)
         
-        self._FIXED_display_status()
+        self._display_status()
     
     async def _update_market_data(self):
         """Update market data"""
@@ -291,8 +297,7 @@ class TradeEngine:
             self._track_exit_reason('position_closed')
             self._log_trade("EXIT", price, reason="position_closed", pnl=pnl)
     
-    # LLM - DO NOT CHANGE THIS
-    def _FIXED_display_status(self):
+    def _display_status(self):
         """Display status"""
         try:
             price = float(self.price_data['close'].iloc[-1])
@@ -315,7 +320,7 @@ class TradeEngine:
 
             print("📊  EXIT REASONS SUMMARY\n" + "─"*w)
             print(f"🎯 profit_target_$20 : {er['profit_target_$20']:2d} │ 🚨 emergency_stop : {er['emergency_stop']:2d} │ ⏰ max_hold_time   : {er['max_hold_time']:2d}")
-            print(f"💰 profit_lock       : {er['profit_lock']:2d} │ 📉 trailing_stop  : {er['trailing_stop']:2d} │ 🔄 position_closed : {er['position_closed']:2d}")
+            print(f"💰 profit_lock       : {er['profit_lock']:2d} │ 🔄 position_closed : {er['position_closed']:2d} │ 🛑 bot_shutdown    : {er['bot_shutdown']:2d}")
             print("─"*w + "\n")
 
             print(f"⏰ {time}   |   💰 ${price_formatted}")

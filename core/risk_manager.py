@@ -11,18 +11,13 @@ class RiskManager:
             'max_position_time': 75,
             'emergency_stop_pct': 0.006,
             'fixed_profit_lock_threshold': 11,
-            'trailing_stop_pct': 0.0015,
             'entry_fee_pct': 0.00055,
-            'exit_fee_pct': 0.00055,
-            'min_balance': 10
+            'exit_fee_pct': 0.00055
         }
         self.symbol = os.getenv('TRADING_SYMBOL')
     
     def validate_trade(self, signal, balance, current_price):
         """Validate if trade should be executed"""
-        if balance < self.config['min_balance']:
-            return False, "Insufficient balance"
-        
         if not signal or not signal.get('action') or not signal.get('structure_stop'):
             return False, "Invalid signal"
         
@@ -57,10 +52,5 @@ class RiskManager:
         # Fixed profit lock threshold ($11)
         if unrealized_pnl >= self.config['fixed_profit_lock_threshold']:
             return True, "profit_lock"
-        
-        # Trailing stop
-        price_change = (current_price - entry_price) / entry_price if side == "Buy" else (entry_price - current_price) / entry_price
-        if price_change < -self.config['trailing_stop_pct']:
-            return True, "trailing_stop"
         
         return False, "hold"
