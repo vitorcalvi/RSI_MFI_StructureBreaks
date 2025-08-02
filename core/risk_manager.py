@@ -18,7 +18,7 @@ class RiskManager:
     
     def _load_config(self):
         """Load strategy configuration with fallback"""
-        fallback = {
+        default_config = {
             "fixed_risk_pct": 0.005, "reward_ratio": 1.5, "max_position_time": 121,
             "emergency_stop_pct": 0.02, "profit_lock_threshold": 0.003, "trailing_stop_pct": 0.005,
             "entry_fee_pct": 0.00055, "exit_fee_pct": 0.00055, "min_balance": 10
@@ -29,7 +29,7 @@ class RiskManager:
                 return json.load(f)
         except Exception as e:
             print(f"❌ Config load error: {e}")
-            return fallback
+            return default_config
     
     def validate_trade(self, signal, balance, current_price):
         """Validate if trade should be executed"""
@@ -65,6 +65,7 @@ class RiskManager:
         if position_size < 0.001:
             return 0
         
+        # Cap at 10% of balance
         max_size = balance * 0.1 / entry_price
         return min(position_size, max_size)
     
@@ -72,15 +73,19 @@ class RiskManager:
         """Determine if position should be closed based on risk rules"""
         pnl_pct = unrealized_pnl / entry_price if entry_price > 0 else 0
         
+        # Emergency stop
         if pnl_pct <= -self.config['emergency_stop_pct']:
             return True, "emergency_stop"
         
+        # Max hold time
         if position_age_seconds >= self.config['max_position_time']:
             return True, "max_hold_time_exceeded"
         
+        # Profit lock
         if pnl_pct >= self.config.get('profit_lock_threshold', 0.003):
             return True, "profit_lock"
         
+        # Trailing stop
         trailing_threshold = self.config.get('trailing_stop_pct', 0.005)
         price_change = (current_price - entry_price) / entry_price if side == "Buy" else (entry_price - current_price) / entry_price
         

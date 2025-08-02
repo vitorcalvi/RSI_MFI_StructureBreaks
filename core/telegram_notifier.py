@@ -16,7 +16,7 @@ class TelegramNotifier:
         print(f"Telegram notifications {status}")
     
     async def send_message(self, message):
-        """Send raw message to Telegram"""
+        """Send message to Telegram"""
         if not self.enabled:
             return False
         
@@ -38,11 +38,10 @@ class TelegramNotifier:
     
     async def send_trade_entry(self, signal_data, price, quantity, strategy_info):
         """Send trade entry notification"""
-        try:
-            emoji = "🟢" if signal_data['action'] == 'BUY' else "🔴"
-            direction = "LONG" if signal_data['action'] == 'BUY' else "SHORT"
-            
-            message = f"""
+        emoji = "🟢" if signal_data['action'] == 'BUY' else "🔴"
+        direction = "LONG" if signal_data['action'] == 'BUY' else "SHORT"
+        
+        message = f"""
 {emoji} <b>TRADE ENTRY - {direction}</b>
 
 📊 <b>Symbol:</b> {self.symbol}
@@ -57,19 +56,16 @@ class TelegramNotifier:
 
 ⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
 """
-            
-            await self.send_message(message)
-        except Exception as e:
-            print(f"❌ Trade entry notification error: {e}")
+        
+        await self.send_message(message)
     
     async def send_trade_exit(self, exit_data, price, pnl, duration, strategy_info):
         """Send trade exit notification"""
-        try:
-            emoji = "🟢" if pnl >= 0 else "🔴"
-            pnl_text = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
-            trigger_formatted = exit_data['trigger'].replace('_', ' ').title()
-            
-            message = f"""
+        emoji = "🟢" if pnl >= 0 else "🔴"
+        pnl_text = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+        trigger_formatted = exit_data['trigger'].replace('_', ' ').title()
+        
+        message = f"""
 {emoji} <b>TRADE EXIT</b>
 
 📊 <b>Symbol:</b> {self.symbol}
@@ -82,21 +78,19 @@ class TelegramNotifier:
 
 ⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
 """
-            
-            await self.send_message(message)
-        except Exception as e:
-            print(f"❌ Trade exit notification error: {e}")
+        
+        await self.send_message(message)
     
     async def send_bot_status(self, status, message_text=""):
         """Send bot status notification"""
-        try:
-            status_emoji = {
-                'started': '🚀', 'stopped': '🛑', 'error': '❌', 'warning': '⚠️'
-            }
-            
-            emoji = status_emoji.get(status, '📊')
-            
-            message = f"""
+        status_emojis = {
+            'started': '🚀', 'stopped': '🛑', 
+            'error': '❌', 'warning': '⚠️'
+        }
+        
+        emoji = status_emojis.get(status, '📊')
+        
+        message = f"""
 {emoji} <b>BOT STATUS: {status.upper()}</b>
 
 📊 <b>Symbol:</b> {self.symbol}
@@ -105,15 +99,12 @@ class TelegramNotifier:
 
 ⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
 """
-            
-            await self.send_message(message)
-        except Exception as e:
-            print(f"❌ Bot status notification error: {e}")
+        
+        await self.send_message(message)
     
     async def send_error_alert(self, error_type, error_message):
         """Send error alert notification"""
-        try:
-            message = f"""
+        message = f"""
 ❌ <b>ERROR ALERT</b>
 
 📊 <b>Symbol:</b> {self.symbol}
@@ -122,7 +113,5 @@ class TelegramNotifier:
 
 ⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
 """
-            
-            await self.send_message(message)
-        except Exception as e:
-            print(f"❌ Error alert notification error: {e}")
+        
+        await self.send_message(message)
