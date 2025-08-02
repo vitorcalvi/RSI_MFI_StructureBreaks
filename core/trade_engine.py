@@ -116,7 +116,7 @@ class TradeEngine:
             if signal:
                 await self._execute_trade(signal)
         
-        self._display_status()
+        self._FIXED_display_status()
     
     async def _update_market_data(self):
         """Update market data"""
@@ -291,7 +291,8 @@ class TradeEngine:
             self._track_exit_reason('position_closed')
             self._log_trade("EXIT", price, reason="position_closed", pnl=pnl)
     
-    def _display_status(self):
+    # LLM - DO NOT CHANGE THIS
+    def _FIXED_display_status(self):
         """Display status"""
         try:
             price = float(self.price_data['close'].iloc[-1])
