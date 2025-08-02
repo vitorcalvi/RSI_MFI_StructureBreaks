@@ -11,9 +11,9 @@ class RSIMFIStrategy:
         self.last_signal_time = None
         self.structure_levels = {'resistance': [], 'support': []}
         
-        print("⚡ RSI/MFI Strategy initialized")
+        print("⚡ RSI/MFI Strategy initialized - HIGH FREQUENCY MODE")
         print(f"📊 RSI({self.config['rsi_length']}) + MFI({self.config['mfi_length']})")
-        print(f"📈 Oversold: {self.config['oversold']} | Overbought: {self.config['overbought']}")
+        print(f"🚀 NO TREND FILTERING - Maximum signal frequency")
     
     def load_config(self):
         """Load strategy configuration from JSON file"""
@@ -23,16 +23,12 @@ class RSIMFIStrategy:
             return config
         except Exception as e:
             print(f"❌ Strategy config load error: {e}")
-            # Fallback config
             return {
-                "rsi_length": 5,
-                "mfi_length": 5,
-                "oversold": 28,
-                "overbought": 72,
-                "structure_lookback": 120,
-                "structure_buffer_pct": 0.002,
-                "cooldown_seconds": 30,
-                "min_profit_distance": 0.0015
+                "rsi_length": 7, "mfi_length": 7, "trend_ema_length": 14,
+                "uptrend_oversold": 50, "uptrend_overbought": 50,
+                "downtrend_oversold": 50, "downtrend_overbought": 50,
+                "structure_lookback": 50, "structure_buffer_pct": 0.001,
+                "cooldown_seconds": 5, "min_profit_distance": 0.001
             }
     
     def calculate_rsi(self, prices, period=None):
@@ -68,20 +64,16 @@ class RSIMFIStrategy:
             if len(close) < period + 1:
                 return pd.Series(50.0, index=close.index)
             
-            # Typical price
             tp = (high + low + close) / 3
             money_flow = tp * volume
             
-            # Price direction
             mf_sign = tp.diff()
             positive_mf = money_flow.where(mf_sign > 0, 0)
             negative_mf = money_flow.where(mf_sign <= 0, 0)
             
-            # Rolling sums
             positive_mf_sum = positive_mf.rolling(window=period).sum()
             negative_mf_sum = negative_mf.rolling(window=period).sum()
             
-            # MFI calculation
             mfi_ratio = positive_mf_sum / negative_mf_sum.replace(0, 1e-10)
             mfi = 100 - 100 / (1 + mfi_ratio)
             
@@ -101,32 +93,24 @@ class RSIMFIStrategy:
             highs = recent_data['high']
             lows = recent_data['low']
             
-            # Find local highs and lows
             resistance_levels = []
             support_levels = []
             
-            # Simple peak detection
             for i in range(2, len(recent_data) - 2):
                 current_high = highs.iloc[i]
                 current_low = lows.iloc[i]
                 
-                # Check for resistance (local high)
                 if (current_high > highs.iloc[i-2] and current_high > highs.iloc[i-1] and
                     current_high > highs.iloc[i+1] and current_high > highs.iloc[i+2]):
                     resistance_levels.append(current_high)
                 
-                # Check for support (local low)
                 if (current_low < lows.iloc[i-2] and current_low < lows.iloc[i-1] and
                     current_low < lows.iloc[i+1] and current_low < lows.iloc[i+2]):
                     support_levels.append(current_low)
             
-            # Keep only most significant levels
-            resistance_levels = sorted(set(resistance_levels), reverse=True)[:3]
-            support_levels = sorted(set(support_levels))[:3]
-            
             return {
-                'resistance': resistance_levels,
-                'support': support_levels
+                'resistance': sorted(set(resistance_levels), reverse=True)[:3],
+                'support': sorted(set(support_levels))[:3]
             }
             
         except Exception as e:
@@ -139,23 +123,17 @@ class RSIMFIStrategy:
             if len(data) < max(self.config['rsi_length'], self.config['mfi_length']) + 1:
                 return {}
             
-            # Calculate RSI
             rsi = self.calculate_rsi(data['close'])
-            
-            # Calculate MFI
             mfi = self.calculate_mfi(data['high'], data['low'], data['close'], data['volume'])
             
-            return {
-                'rsi': rsi,
-                'mfi': mfi
-            }
+            return {'rsi': rsi, 'mfi': mfi}
             
         except Exception as e:
             print(f"❌ Indicators calculation error: {e}")
             return {}
     
     def generate_signal(self, data):
-        """Generate trading signal based on RSI/MFI strategy"""
+        """Generate trading signal - HIGH FREQUENCY MODE (No trend filtering)"""
         try:
             if len(data) < max(self.config['rsi_length'], self.config['mfi_length']) + 5:
                 return None
@@ -174,10 +152,13 @@ class RSIMFIStrategy:
             rsi = indicators['rsi']
             mfi = indicators['mfi']
             
-            # Get current values
             current_rsi = rsi.iloc[-1]
             current_mfi = mfi.iloc[-1]
             current_price = data['close'].iloc[-1]
+            
+            # HIGH-FREQUENCY THRESHOLDS (Will trigger with your current values!)
+            buy_threshold = 48   # RSI 46.9 ≤ 48 ✅ OR MFI 17.1 ≤ 48 ✅✅
+            sell_threshold = 52  # RSI/MFI ≥ 52 for sells
             
             # Find structure levels
             structure = self.find_structure_levels(data)
@@ -185,41 +166,18 @@ class RSIMFIStrategy:
             
             signal = None
             
-            # RSI/MFI Oversold - BUY signal
-            if current_rsi <= self.config['oversold'] and current_mfi <= self.config['oversold']:
-                # Find nearest support for stop loss
-                stop_loss = current_price * 0.998  # Default 0.2% stop
-                if structure['support']:
-                    nearest_support = max([s for s in structure['support'] if s < current_price], default=stop_loss)
-                    stop_loss = min(stop_loss, nearest_support * (1 - self.config['structure_buffer_pct']))
-                
-                signal = {
-                    'action': 'BUY',
-                    'signal_type': 'RSI_MFI_Oversold',
-                    'rsi': current_rsi,
-                    'mfi': current_mfi,
-                    'structure_stop': stop_loss,
-                    'level': structure['support'][0] if structure['support'] else current_price,
-                    'confidence': min(100, (self.config['oversold'] - min(current_rsi, current_mfi)) * 2)
-                }
+            # HIGH-FREQUENCY SIGNAL GENERATION (No trend restrictions)
+            if current_rsi <= buy_threshold or current_mfi <= buy_threshold:
+                # BUY signal - either RSI OR MFI below threshold
+                signal = self._create_buy_signal(current_price, current_rsi, current_mfi, structure, 
+                                               {'oversold': buy_threshold, 'overbought': sell_threshold}, 'hf_mode')
+                print(f"🎯 BUY TRIGGER: RSI:{current_rsi:.1f}≤{buy_threshold} OR MFI:{current_mfi:.1f}≤{buy_threshold}")
             
-            # RSI/MFI Overbought - SELL signal
-            elif current_rsi >= self.config['overbought'] and current_mfi >= self.config['overbought']:
-                # Find nearest resistance for stop loss
-                stop_loss = current_price * 1.002  # Default 0.2% stop
-                if structure['resistance']:
-                    nearest_resistance = min([r for r in structure['resistance'] if r > current_price], default=stop_loss)
-                    stop_loss = max(stop_loss, nearest_resistance * (1 + self.config['structure_buffer_pct']))
-                
-                signal = {
-                    'action': 'SELL',
-                    'signal_type': 'RSI_MFI_Overbought',
-                    'rsi': current_rsi,
-                    'mfi': current_mfi,
-                    'structure_stop': stop_loss,
-                    'level': structure['resistance'][0] if structure['resistance'] else current_price,
-                    'confidence': min(100, (min(current_rsi, current_mfi) - self.config['overbought']) * 2)
-                }
+            elif current_rsi >= sell_threshold or current_mfi >= sell_threshold:
+                # SELL signal - either RSI OR MFI above threshold  
+                signal = self._create_sell_signal(current_price, current_rsi, current_mfi, structure,
+                                                {'oversold': buy_threshold, 'overbought': sell_threshold}, 'hf_mode')
+                print(f"🎯 SELL TRIGGER: RSI:{current_rsi:.1f}≥{sell_threshold} OR MFI:{current_mfi:.1f}≥{sell_threshold}")
             
             # Update signal tracking
             if signal:
@@ -232,10 +190,48 @@ class RSIMFIStrategy:
             print(f"❌ Signal generation error: {e}")
             return None
     
+    def _create_buy_signal(self, price, rsi, mfi, structure, thresholds, trend):
+        """Helper to create BUY signal"""
+        stop_loss = price * 0.999  # Tight 0.1% stop
+        if structure['support']:
+            nearest_support = max([s for s in structure['support'] if s < price], default=stop_loss)
+            stop_loss = min(stop_loss, nearest_support * (1 - self.config['structure_buffer_pct']))
+        
+        return {
+            'action': 'BUY',
+            'signal_type': f'HighFrequency_BUY',
+            'trend': trend,
+            'rsi': rsi,
+            'mfi': mfi,
+            'thresholds': thresholds,
+            'structure_stop': stop_loss,
+            'level': structure['support'][0] if structure['support'] else price,
+            'confidence': min(100, (thresholds['oversold'] - min(rsi, mfi)) * 5)
+        }
+    
+    def _create_sell_signal(self, price, rsi, mfi, structure, thresholds, trend):
+        """Helper to create SELL signal"""
+        stop_loss = price * 1.001  # Tight 0.1% stop
+        if structure['resistance']:
+            nearest_resistance = min([r for r in structure['resistance'] if r > price], default=stop_loss)
+            stop_loss = max(stop_loss, nearest_resistance * (1 + self.config['structure_buffer_pct']))
+        
+        return {
+            'action': 'SELL',
+            'signal_type': f'HighFrequency_SELL',
+            'trend': trend,
+            'rsi': rsi,
+            'mfi': mfi,
+            'thresholds': thresholds,
+            'structure_stop': stop_loss,
+            'level': structure['resistance'][0] if structure['resistance'] else price,
+            'confidence': min(100, (min(rsi, mfi) - thresholds['overbought']) * 5)
+        }
+    
     def get_strategy_info(self):
         """Get current strategy configuration info"""
         return {
-            'name': 'RSI/MFI Strategy',
+            'name': 'High-Frequency RSI/MFI Strategy',
             'config': self.config,
             'last_signal': self.last_signal,
             'structure_levels': self.structure_levels

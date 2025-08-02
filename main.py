@@ -18,7 +18,7 @@ class HFScalpingBot:
     def __init__(self):
         self.engine = TradeEngine()
         self.running = False
-        self.profit_target = 20.0  # $2 USD profit target
+        self.profit_target = 20.0  # $20 USD profit target
         self.last_pnl_check = 0
         
     async def start(self):
@@ -83,10 +83,9 @@ class HFScalpingBot:
                 size = self.engine.position.get('size', '0')
                 entry_price = float(self.engine.position.get('avgPrice', 0))
                 
-                if current_pnl > 0:
-                    print(f"📈 Position profitable: {side} {size} @ ${entry_price:.2f} | PnL: +${current_pnl:.2f}")
-                else:
-                    print(f"📉 Position underwater: {side} {size} @ ${entry_price:.2f} | PnL: ${current_pnl:.2f}")
+                status = "📈 Position profitable" if current_pnl > 0 else "📉 Position underwater"
+                pnl_display = f"+${current_pnl:.2f}" if current_pnl > 0 else f"${current_pnl:.2f}"
+                print(f"{status}: {side} {size} @ ${entry_price:.2f} | PnL: {pnl_display}")
                 
         except Exception as e:
             print(f"❌ Profit monitoring error: {e}")

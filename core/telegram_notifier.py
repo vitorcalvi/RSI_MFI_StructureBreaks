@@ -12,10 +12,8 @@ class TelegramNotifier:
         self.symbol = os.getenv('TRADING_SYMBOL', 'ADAUSDT')
         self.enabled = bool(self.bot_token and self.chat_id)
         
-        if self.enabled:
-            print("✅ Telegram notifications enabled")
-        else:
-            print("⚠️ Telegram notifications disabled (missing credentials)")
+        status = "✅ enabled" if self.enabled else "⚠️ disabled (missing credentials)"
+        print(f"Telegram notifications {status}")
     
     async def send_message(self, message):
         """Send raw message to Telegram"""
@@ -89,43 +87,11 @@ class TelegramNotifier:
         except Exception as e:
             print(f"❌ Trade exit notification error: {e}")
     
-    async def send_position_update(self, position_data, current_price, strategy_info):
-        """Send position update notification"""
-        try:
-            side = position_data.get('side', 'Unknown')
-            size = position_data.get('size', '0')
-            entry_price = float(position_data.get('avgPrice', 0))
-            unrealized_pnl = float(position_data.get('unrealisedPnl', 0))
-            
-            position_value = float(size) * entry_price
-            pnl_pct = (unrealized_pnl / position_value) * 100 if position_value > 0 else 0
-            emoji = "🟢" if unrealized_pnl >= 0 else "🔴"
-            
-            message = f"""
-{emoji} <b>POSITION UPDATE</b>
-
-📊 <b>Symbol:</b> {self.symbol}
-📈 <b>Side:</b> {side}
-💰 <b>Size:</b> {size}
-💵 <b>Entry:</b> ${entry_price:.2f}
-💰 <b>Current:</b> ${current_price:.2f}
-📊 <b>PnL:</b> ${unrealized_pnl:.2f} ({pnl_pct:+.2f}%)
-
-⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
-"""
-            
-            await self.send_message(message)
-        except Exception as e:
-            print(f"❌ Position update notification error: {e}")
-    
     async def send_bot_status(self, status, message_text=""):
         """Send bot status notification"""
         try:
             status_emoji = {
-                'started': '🚀',
-                'stopped': '🛑', 
-                'error': '❌',
-                'warning': '⚠️'
+                'started': '🚀', 'stopped': '🛑', 'error': '❌', 'warning': '⚠️'
             }
             
             emoji = status_emoji.get(status, '📊')
@@ -160,19 +126,3 @@ class TelegramNotifier:
             await self.send_message(message)
         except Exception as e:
             print(f"❌ Error alert notification error: {e}")
-    
-    async def send_balance_update(self, balance):
-        """Send balance update notification"""
-        try:
-            message = f"""
-💰 <b>BALANCE UPDATE</b>
-
-📊 <b>Symbol:</b> {self.symbol}
-💵 <b>Balance:</b> ${balance:,.2f}
-
-⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
-"""
-            
-            await self.send_message(message)
-        except Exception as e:
-            print(f"❌ Balance update notification error: {e}")

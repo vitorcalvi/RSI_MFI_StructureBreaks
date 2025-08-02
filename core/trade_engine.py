@@ -33,9 +33,16 @@ class TradeEngine:
         self.trade_id = 0
         self.current_signal = None
         
-        # Symbol-specific trading rules (will be loaded on connect)
-        self.qty_step = "0.001"  # Default, will be updated
-        self.min_qty = 0.001     # Default, will be updated
+        # Exit reasons tracking
+        self.exit_reasons = {
+            'profit_target_$20': 0, 'emergency_stop': 0, 'max_hold_time': 0,
+            'profit_lock': 0, 'trailing_stop': 0, 'position_closed': 0,
+            'bot_shutdown': 0, 'manual_exit': 0
+        }
+        
+        # Symbol-specific trading rules
+        self.qty_step = "0.001"
+        self.min_qty = 0.001
         
         os.makedirs("logs", exist_ok=True)
         self.log_file = "logs/trades.log"
@@ -56,7 +63,6 @@ class TradeEngine:
                 print(f"❌ Connection failed: {info.get('retMsg')}")
                 return False
             
-            # Load symbol-specific trading rules
             self._load_symbol_info()
             
             mode = 'testnet' if self.demo_mode else 'mainnet'
@@ -75,67 +81,51 @@ class TradeEngine:
             
             if instruments.get('retCode') == 0 and instruments['result']['list']:
                 symbol_info = instruments['result']['list'][0]
-                
-                # Extract lot size info
                 lot_size_filter = symbol_info.get('lotSizeFilter', {})
                 self.qty_step = lot_size_filter.get('qtyStep', '0.001')
                 self.min_qty = float(lot_size_filter.get('minOrderQty', '0.001'))
-                
                 print(f"✅ Loaded {self.symbol} rules: qtyStep={self.qty_step}, minQty={self.min_qty}")
             else:
                 print(f"⚠️ Could not load {self.symbol} info, using defaults")
-                # Set common defaults based on symbol
-                if 'ETH' in self.symbol:
-                    self.qty_step = '0.01'
-                    self.min_qty = 0.01
-                elif 'BTC' in self.symbol:
-                    self.qty_step = '0.001'
-                    self.min_qty = 0.001
-                else:  # ADA and most others
-                    self.qty_step = '1'
-                    self.min_qty = 1.0
+                self._set_default_symbol_rules()
                     
         except Exception as e:
             print(f"❌ Symbol info load error: {e}")
-            # Fallback defaults
-            if 'ETH' in self.symbol:
-                self.qty_step = '0.01'
-                self.min_qty = 0.01
-            elif 'BTC' in self.symbol:
-                self.qty_step = '0.001'
-                self.min_qty = 0.001  
-            else:
-                self.qty_step = '1'
-                self.min_qty = 1.0
+            self._set_default_symbol_rules()
+    
+    def _set_default_symbol_rules(self):
+        """Set default trading rules based on symbol"""
+        defaults = {
+            'ETH': ('0.01', 0.01),
+            'BTC': ('0.001', 0.001)
+        }
+        
+        for key, (step, min_qty) in defaults.items():
+            if key in self.symbol:
+                self.qty_step, self.min_qty = step, min_qty
+                return
+        
+        # Default for ADA and others
+        self.qty_step, self.min_qty = '1', 1.0
     
     def format_quantity(self, qty):
-        """Format quantity according to exchange rules for the specific symbol"""
+        """Format quantity according to exchange rules"""
         try:
             if qty < self.min_qty:
                 return "0"
             
-            # Calculate decimal places from qty_step
-            if '.' in self.qty_step:
-                decimals = len(self.qty_step.split('.')[1])
-            else:
-                decimals = 0
-            
-            # Round to qty_step precision
+            decimals = len(self.qty_step.split('.')[1]) if '.' in self.qty_step else 0
             qty_step_float = float(self.qty_step)
             rounded_qty = round(qty / qty_step_float) * qty_step_float
             
-            # Format with correct decimal places
-            if decimals > 0:
-                return f"{rounded_qty:.{decimals}f}"
-            else:
-                return str(int(rounded_qty))
+            return f"{rounded_qty:.{decimals}f}" if decimals > 0 else str(int(rounded_qty))
                 
         except Exception as e:
             print(f"❌ Quantity formatting error: {e}")
-            return f"{qty:.3f}"  # Fallback
+            return f"{qty:.3f}"
     
     def _log_trade(self, action, price, **kwargs):
-        """Log trade to file with deduplication"""
+        """Log trade to file"""
         timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         
         if action == "ENTRY":
@@ -149,73 +139,33 @@ class TradeEngine:
                        f"param_hash=7e3d21a  hold_s=0.0   pnl=0.00")
         else:  # EXIT
             duration = (datetime.now() - self.position_start_time).total_seconds() if self.position_start_time else 0
-            log_line = (f"{timestamp}  id={self.trade_id}  action=EXIT   trigger={kwargs.get('reason', '').lower().replace(' ', '_')}  "
+            reason = kwargs.get('reason', '').lower().replace(' ', '_')
+            log_line = (f"{timestamp}  id={self.trade_id}  action=EXIT   trigger={reason}  "
                        f"price={price:.2f}  pnl={kwargs.get('pnl', 0):.2f}  hold_s={duration:.1f}  final=true  "
                        f"param_hash=7e3d21a  rsi={kwargs.get('rsi', 0):.1f}  mfi={kwargs.get('mfi', 0):.1f}")
         
         try:
-            # Check for duplicate EXIT records before writing
-            if action == "EXIT" and self._is_duplicate_exit(log_line):
-                return
-            
             with open(self.log_file, "a") as f:
                 f.write(log_line + "\n")
         except Exception as e:
             print(f"❌ Logging error: {e}")
     
-    def _is_duplicate_exit(self, new_log_line):
-        """Check if EXIT record is duplicate of recent entries"""
-        try:
-            if not os.path.exists(self.log_file):
-                return False
-            
-            # Extract key fields from new log line
-            import re
-            new_id = re.search(r'id=(\d+)', new_log_line)
-            new_price = re.search(r'price=([0-9.]+)', new_log_line)
-            new_pnl = re.search(r'pnl=([0-9.-]+)', new_log_line)
-            
-            if not all([new_id, new_price, new_pnl]):
-                return False
-            
-            new_id = int(new_id.group(1))
-            new_price = float(new_price.group(1))
-            new_pnl = float(new_pnl.group(1))
-            
-            # Read last 3 lines to check for duplicates
-            with open(self.log_file, 'r') as f:
-                lines = f.readlines()
-            
-            if len(lines) < 1:
-                return False
-            
-            # Check last 2 lines for matching EXIT records
-            for line in lines[-2:]:
-                if 'action=EXIT' not in line:
-                    continue
-                
-                existing_id = re.search(r'id=(\d+)', line)
-                existing_price = re.search(r'price=([0-9.]+)', line)
-                existing_pnl = re.search(r'pnl=([0-9.-]+)', line)
-                
-                if not all([existing_id, existing_price, existing_pnl]):
-                    continue
-                
-                existing_id = int(existing_id.group(1))
-                existing_price = float(existing_price.group(1))
-                existing_pnl = float(existing_pnl.group(1))
-                
-                # Check if this is a duplicate (same id, price, pnl)
-                if (new_id == existing_id and 
-                    abs(new_price - existing_price) < 0.01 and 
-                    abs(new_pnl - existing_pnl) < 0.01):
-                    return True
-            
-            return False
-            
-        except Exception as e:
-            print(f"❌ Duplicate check error: {e}")
-            return False
+    def _track_exit_reason(self, reason):
+        """Track exit reason for statistics"""
+        # Normalize reason for tracking
+        if 'profit_target' in reason:
+            self.exit_reasons['profit_target_$20'] += 1
+        elif reason in self.exit_reasons:
+            self.exit_reasons[reason] += 1
+        else:
+            # Map other reasons
+            reason_map = {
+                'max_hold_time_exceeded': 'max_hold_time',
+                'Bot shutdown': 'bot_shutdown',
+                'Manual': 'manual_exit'
+            }
+            tracked_reason = reason_map.get(reason, 'manual_exit')
+            self.exit_reasons[tracked_reason] += 1
     
     async def run_cycle(self):
         """Run one trading cycle"""
@@ -396,6 +346,9 @@ class TradeEngine:
                 current_rsi = indicators.get('rsi', pd.Series([0])).iloc[-1] if 'rsi' in indicators else 0
                 current_mfi = indicators.get('mfi', pd.Series([0])).iloc[-1] if 'mfi' in indicators else 0
                 
+                # Track exit reason
+                self._track_exit_reason(reason)
+                
                 self._log_trade("EXIT", current_price, reason=reason, pnl=pnl, 
                                rsi=current_rsi, mfi=current_mfi)
                 
@@ -440,6 +393,8 @@ class TradeEngine:
                 current_rsi = indicators.get('rsi', pd.Series([0])).iloc[-1] if 'rsi' in indicators else 0
                 current_mfi = indicators.get('mfi', pd.Series([0])).iloc[-1] if 'mfi' in indicators else 0
                 
+                self._track_exit_reason('position_closed')
+                
                 self._log_trade("EXIT", price, reason="position_closed", pnl=pnl,
                                rsi=current_rsi, mfi=current_mfi)
             
@@ -448,25 +403,47 @@ class TradeEngine:
             print(f"❌ Position closed handler error: {e}")
     
     def _display_status(self):
-        """Display current trading status"""
+        """Display enhanced trading status with exit reasons"""
         try:
             price = float(self.price_data['close'].iloc[-1])
             time = self.price_data.index[-1].strftime('%H:%M:%S')
             
-            # os.system('cls' if os.name == 'nt' else 'clear')
+            # Format symbol display
+            symbol_display = self.symbol.replace('USDT', '/USDT')
+            price_formatted = f"{price:,.2f}".replace(',', ' ')
+            
+            print("\n" * 50)  # Clear screen
             
             print("=" * 60)
-            print(f"⚡ {self.symbol} HIGH-FREQUENCY SCALPING BOT")
+            print(f"⚡  {symbol_display} HIGH-FREQUENCY SCALPING BOT")
             print("=" * 60)
-            print(f"⏰ {time} | 💰 ${price:.2f}")
+            print()
+            print("📊  EXIT REASONS SUMMARY")
+            print("─" * 77)
+            print(f"🎯 profit_target_$20 : {self.exit_reasons['profit_target_$20']:2d} │ "
+                  f"🚨 emergency_stop : {self.exit_reasons['emergency_stop']:2d} │ "
+                  f"⏰ max_hold_time : {self.exit_reasons['max_hold_time']:2d}")
+            print(f"💰 profit_lock       : {self.exit_reasons['profit_lock']:2d} │ "
+                  f"📉 trailing_stop  : {self.exit_reasons['trailing_stop']:2d} │ "
+                  f"🔄 position_closed : {self.exit_reasons['position_closed']:2d}")
+            print(f"🛑 bot_shutdown      : {self.exit_reasons['bot_shutdown']:2d} │ "
+                  f"✋ manual_exit    : {self.exit_reasons['manual_exit']:2d}")
+            print("─" * 77)
+            print()
+            
+            # Market info
+            print(f"⏰ {time}   |   💰 ${price_formatted}")
             
             if len(self.price_data) > 10:
                 indicators = self.strategy.calculate_indicators(self.price_data)
                 if indicators:
                     rsi = indicators.get('rsi', pd.Series([50])).iloc[-1]
                     mfi = indicators.get('mfi', pd.Series([50])).iloc[-1]
-                    print(f"📈 RSI: {rsi:.1f} | MFI: {mfi:.1f}")
+                    print(f"📈 RSI: {rsi:.1f}  |   MFI: {mfi:.1f}")
             
+            print()
+            
+            # Position info
             if self.position:
                 pnl = float(self.position.get('unrealisedPnl', 0))
                 entry = float(self.position.get('avgPrice', 0))
@@ -478,13 +455,12 @@ class TradeEngine:
                 max_hold = self.risk_manager.config['max_position_time']
                 
                 emoji = "🟢" if side == "Buy" else "🔴"
-                print(f"\n{emoji} POSITION: {side} | {size}")
-                print(f"Entry: ${entry:.2f} | PnL: ${pnl:.2f} ({pnl_pct:+.2f}%)")
-                print(f"⏱️ {age:.1f}s / {max_hold}s")
+                print(f"{emoji} {side} Position: {size} @ ${entry:.2f}")
+                print(f"   PnL: ${pnl:.2f} ({pnl_pct:+.2f}%) | Age: {age:.1f}s / {max_hold}s")
             else:
-                print("\n⚡ No Position - Scanning...")
+                print("⚡  No Position — scanning…")
             
-            print("-" * 60)
+            print("─" * 60)
             
         except Exception as e:
             print(f"❌ Display error: {e}")
