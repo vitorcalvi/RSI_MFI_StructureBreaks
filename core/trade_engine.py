@@ -20,19 +20,16 @@ class TradeEngine:
         self.symbol = os.getenv('TRADING_SYMBOL', 'ADAUSDT')
         self.demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
         
-        # API credentials
         prefix = 'TESTNET_' if self.demo_mode else 'LIVE_'
         self.api_key = os.getenv(f'{prefix}BYBIT_API_KEY')
         self.api_secret = os.getenv(f'{prefix}BYBIT_API_SECRET')
         
-        # State
         self.exchange = None
         self.position = None
         self.position_start_time = None
         self.price_data = pd.DataFrame()
         self.trade_id = 0
         
-        # Exit tracking
         self.exit_reasons = {
             'profit_target_$20': 0, 'emergency_stop': 0, 'max_hold_time': 0,
             'profit_lock': 0, 'trailing_stop': 0, 'position_closed': 0,
@@ -46,9 +43,7 @@ class TradeEngine:
     def _set_symbol_rules(self):
         """Set symbol-specific trading rules"""
         symbol_rules = {
-            'ETH': ('0.01', 0.01),
-            'BTC': ('0.001', 0.001),
-            'ADA': ('1', 1.0)
+            'ETH': ('0.01', 0.01), 'BTC': ('0.001', 0.001), 'ADA': ('1', 1.0)
         }
         
         for key, (step, min_qty) in symbol_rules.items():
@@ -66,7 +61,6 @@ class TradeEngine:
                 api_key=self.api_key,
                 api_secret=self.api_secret
             )
-            
             info = self.exchange.get_server_time()
             return info.get('retCode') == 0
         except:
@@ -128,10 +122,7 @@ class TradeEngine:
         """Update market data"""
         try:
             klines = self.exchange.get_kline(
-                category="linear",
-                symbol=self.symbol,
-                interval="1",
-                limit=200
+                category="linear", symbol=self.symbol, interval="1", limit=200
             )
             
             if klines.get('retCode') != 0:
@@ -243,13 +234,8 @@ class TradeEngine:
         
         try:
             order = self.exchange.place_order(
-                category="linear",
-                symbol=self.symbol,
-                side=side,
-                orderType="Market",
-                qty=qty,
-                timeInForce="IOC",
-                reduceOnly=True
+                category="linear", symbol=self.symbol, side=side,
+                orderType="Market", qty=qty, timeInForce="IOC", reduceOnly=True
             )
             
             if order.get('retCode') == 0:
@@ -305,9 +291,8 @@ class TradeEngine:
             self._track_exit_reason('position_closed')
             self._log_trade("EXIT", price, reason="position_closed", pnl=pnl)
     
-    # CRITICAL: DO NOT MODIFY THIS FUNCTION: DO NOT EDIT THIS
     def _display_status(self):
-        """Display status """
+        """Display status"""
         try:
             price = float(self.price_data['close'].iloc[-1])
             time = self.price_data.index[-1].strftime('%H:%M:%S')
@@ -315,11 +300,12 @@ class TradeEngine:
             symbol_display = self.symbol.replace('USDT', '/USDT')
             price_formatted = f"{price:,.2f}".replace(',', ' ')
             
-            print("\n" * 50)  # Clear screen
+            print("\n" * 50)
             
             w = 77
             print(f"{'='*w}\n⚡  {symbol_display} HIGH-FREQUENCY SCALPING BOT\n{'='*w}\n")
-            c = self.strategy.config; er = self.exit_reasons
+            c = self.strategy.config
+            er = self.exit_reasons
 
             print("⚙️  STRATEGY SETUP\n" + "─"*w)
             print(f"📊 RSI({c['rsi_length']}) MFI({c['mfi_length']}) │ 🔥 Cooldown: {c['cooldown_seconds']}s  │ ⚡ Mode: FIXED-SIZE")
@@ -331,7 +317,6 @@ class TradeEngine:
             print(f"💰 profit_lock       : {er['profit_lock']:2d} │ 📉 trailing_stop  : {er['trailing_stop']:2d} │ 🔄 position_closed : {er['position_closed']:2d}")
             print("─"*w + "\n")
 
-            # Market info
             print(f"⏰ {time}   |   💰 ${price_formatted}")
             
             if len(self.price_data) > 10:
@@ -343,7 +328,6 @@ class TradeEngine:
             
             print()
             
-            # Position info
             if self.position:
                 pnl = float(self.position.get('unrealisedPnl', 0))
                 entry = float(self.position.get('avgPrice', 0))

@@ -4,24 +4,17 @@ import json
 from datetime import datetime
 
 class RSIMFIStrategy:
-    def __init__(self, config_file="strategies/rsi_mfi.json"):
-        self.config = self._load_config(config_file)
-        self.last_signal_time = None
-    
-    def _load_config(self, config_file):
-        """Load strategy configuration"""
-        default_config = {
-            "rsi_length": 14, "mfi_length": 14,
-            "uptrend_oversold": 40, "downtrend_overbought": 50,
-            "neutral_oversold": 25, "neutral_overbought": 75,
-            "cooldown_seconds": 5
+    def __init__(self):
+        self.config = {
+            "rsi_length": 3,
+            "mfi_length": 3,
+            "uptrend_oversold": 48,
+            "downtrend_overbought": 52,
+            "neutral_oversold": 45,
+            "neutral_overbought": 55,
+            "cooldown_seconds": 1
         }
-        
-        try:
-            with open(config_file, 'r') as f:
-                return json.load(f)
-        except:
-            return default_config
+        self.last_signal_time = None
     
     def calculate_rsi(self, prices):
         """Calculate RSI indicator"""
@@ -81,13 +74,11 @@ class RSIMFIStrategy:
         if len(data) < 50 or self._is_cooldown_active():
             return None
         
-        # Calculate indicators
         rsi = self.calculate_rsi(data['close']).iloc[-1]
         mfi = self.calculate_mfi(data['high'], data['low'], data['close'], data['volume']).iloc[-1]
         trend = self.detect_trend(data)
         price = data['close'].iloc[-1]
         
-        # Generate signals based on trend
         signal = None
         if trend == 'strong_uptrend' and rsi <= self.config['uptrend_oversold'] and mfi <= 50:
             signal = self._create_signal('BUY', trend, rsi, mfi, price, data)
@@ -118,13 +109,8 @@ class RSIMFIStrategy:
             signal_type = f"{trend}_sell"
         
         return {
-            'action': action,
-            'trend': trend,
-            'rsi': rsi,
-            'mfi': mfi,
-            'price': price,
-            'structure_stop': structure_stop,
-            'level': level,
+            'action': action, 'trend': trend, 'rsi': rsi, 'mfi': mfi,
+            'price': price, 'structure_stop': structure_stop, 'level': level,
             'signal_type': signal_type,
             'confidence': min(95, max(70, abs(50 - rsi) + abs(50 - mfi)))
         }
@@ -150,7 +136,4 @@ class RSIMFIStrategy:
     
     def get_strategy_info(self):
         """Get strategy info"""
-        return {
-            'name': 'RSI/MFI Trend Following',
-            'config': self.config
-        }
+        return {'name': 'RSI/MFI Trend Following', 'config': self.config}

@@ -6,17 +6,16 @@ load_dotenv()
 class RiskManager:
     def __init__(self):
         self.config = {
-            'fixed_position_usdt': 10000.0,   
+            'fixed_position_usdt': 10000.0,
             'reward_ratio': 2.5,
             'max_position_time': 75,
             'emergency_stop_pct': 0.006,
-            'profit_lock_threshold': 0.002,
+            'fixed_profit_lock_threshold': 11,
             'trailing_stop_pct': 0.0015,
             'entry_fee_pct': 0.00055,
             'exit_fee_pct': 0.00055,
             'min_balance': 10
         }
-        
         self.symbol = os.getenv('TRADING_SYMBOL')
     
     def validate_trade(self, signal, balance, current_price):
@@ -38,8 +37,7 @@ class RiskManager:
         if balance <= 0 or entry_price <= 0 or stop_price <= 0:
             return 0
         
-        # Use fixed position size instead of percentage-based risk
-        position_usdt = min(self.config['fixed_position_usdt'], balance * 0.5)  # Cap at 50% of balance
+        position_usdt = min(self.config['fixed_position_usdt'], balance * 0.5)
         position_size = position_usdt / entry_price
         
         return round(max(position_size, 0), 3)
@@ -56,8 +54,8 @@ class RiskManager:
         if position_age_seconds >= self.config['max_position_time']:
             return True, "max_hold_time_exceeded"
         
-        # Profit lock
-        if pnl_pct >= self.config['profit_lock_threshold']:
+        # Fixed profit lock threshold ($11)
+        if unrealized_pnl >= self.config['fixed_profit_lock_threshold']:
             return True, "profit_lock"
         
         # Trailing stop

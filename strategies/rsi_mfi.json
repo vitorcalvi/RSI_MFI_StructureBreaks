@@ -1,9 +1,0 @@
-{
-  "rsi_length": 3,
-  "mfi_length": 3,
-  "uptrend_oversold": 48,
-  "downtrend_overbought": 52,
-  "neutral_oversold": 45,
-  "neutral_overbought": 55,
-  "cooldown_seconds": 1
-}

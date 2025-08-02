@@ -17,7 +17,7 @@ class HFScalpingBot:
     def __init__(self):
         self.engine = TradeEngine()
         self.running = False
-        self.profit_target = 20.0  # $20 profit target
+        self.profit_target = 20.0
         
     async def start(self):
         """Start the trading bot"""
