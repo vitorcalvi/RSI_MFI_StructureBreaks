@@ -1,145 +1,101 @@
 import json
 import os
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class RiskManager:
     def __init__(self, config_file="strategies/rsi_mfi.json"):
         self.config_file = config_file
-        self.config = self.load_config()
-        self.symbol = "ADAUSDT"
+        self.config = self._load_config()
+        self.symbol = os.getenv('TRADING_SYMBOL', 'ADAUSDT')
         
         print("⚡ Risk Manager initialized")
+        print(f"🎯 Symbol: {self.symbol}")
         print(f"💰 Risk per trade: {self.config['fixed_risk_pct']*100}%")
         print(f"🎯 Reward ratio: {self.config['reward_ratio']}:1")
         print(f"⏱️ Max hold time: {self.config['max_position_time']}s")
     
-    def load_config(self):
+    def _load_config(self):
+        """Load strategy configuration with fallback"""
+        fallback = {
+            "fixed_risk_pct": 0.005, "reward_ratio": 1.5, "max_position_time": 121,
+            "emergency_stop_pct": 0.02, "profit_lock_threshold": 0.003, "trailing_stop_pct": 0.005,
+            "entry_fee_pct": 0.00055, "exit_fee_pct": 0.00055, "min_balance": 10
+        }
+        
         try:
             with open(self.config_file, 'r') as f:
-                config = json.load(f)
-            return config
+                return json.load(f)
         except Exception as e:
             print(f"❌ Config load error: {e}")
-            # Fallback config
-            return {
-                "fixed_risk_pct": 0.005,
-                "reward_ratio": 1.5,
-                "max_position_time": 121,
-                "emergency_stop_pct": 0.02,
-                "profit_lock_threshold": 0.003,
-                "trailing_stop_pct": 0.005,
-                "entry_fee_pct": 0.00055,
-                "exit_fee_pct": 0.00055,
-                "min_balance": 10
-            }
+            return fallback
     
     def validate_trade(self, signal, balance, current_price):
         """Validate if trade should be executed"""
-        try:
-            # Check minimum balance
-            if balance < self.config.get('min_balance', 10):
-                return False, "Insufficient balance"
-            
-            # Check signal validity
-            if not signal or not signal.get('action') or not signal.get('structure_stop'):
-                return False, "Invalid signal"
-            
-            # Check stop loss distance
-            stop_distance = abs(current_price - signal['structure_stop']) / current_price
-            if stop_distance < 0.0001:  # Too tight stop
-                return False, "Stop loss too tight"
-            
-            if stop_distance > 0.02:  # Too wide stop
-                return False, "Stop loss too wide"
-            
-            return True, "Valid"
-            
-        except Exception as e:
-            return False, f"Validation error: {e}"
+        if balance < self.config.get('min_balance', 10):
+            return False, "Insufficient balance"
+        
+        if not signal or not signal.get('action') or not signal.get('structure_stop'):
+            return False, "Invalid signal"
+        
+        stop_distance = abs(current_price - signal['structure_stop']) / current_price
+        if stop_distance < 0.0001:
+            return False, "Stop loss too tight"
+        if stop_distance > 0.02:
+            return False, "Stop loss too wide"
+        
+        return True, "Valid"
     
     def calculate_position_size(self, balance, entry_price, stop_price):
         """Calculate position size based on risk management rules"""
-        try:
-            if balance <= 0 or entry_price <= 0 or stop_price <= 0:
-                return 0
-            
-            # Risk amount per trade
-            risk_amount = balance * self.config['fixed_risk_pct']
-            
-            # Price difference (risk per unit)
-            price_diff = abs(entry_price - stop_price)
-            if price_diff <= 0:
-                return 0
-            
-            # Account for fees
-            total_fees = self.config['entry_fee_pct'] + self.config['exit_fee_pct']
-            
-            # Calculate position size
-            position_size = (risk_amount / price_diff) / (1 + total_fees)
-            position_size = round(position_size, 3)
-            
-            # Minimum position size check
-            if position_size < 0.001:
-                return 0
-            
-            # Maximum position size (10% of balance)
-            max_size = balance * 0.1 / entry_price
-            return min(position_size, max_size)
-            
-        except Exception as e:
-            print(f"❌ Position size calculation error: {e}")
+        if balance <= 0 or entry_price <= 0 or stop_price <= 0:
             return 0
+        
+        risk_amount = balance * self.config['fixed_risk_pct']
+        price_diff = abs(entry_price - stop_price)
+        
+        if price_diff <= 0:
+            return 0
+        
+        total_fees = self.config['entry_fee_pct'] + self.config['exit_fee_pct']
+        position_size = (risk_amount / price_diff) / (1 + total_fees)
+        position_size = round(position_size, 3)
+        
+        if position_size < 0.001:
+            return 0
+        
+        max_size = balance * 0.1 / entry_price
+        return min(position_size, max_size)
     
     def should_close_position(self, current_price, entry_price, side, unrealized_pnl, position_age_seconds):
         """Determine if position should be closed based on risk rules"""
-        try:
-            # Emergency stop loss
-            pnl_pct = unrealized_pnl / (entry_price * 1) if entry_price > 0 else 0  # Simplified
-            
-            if pnl_pct <= -self.config['emergency_stop_pct']:
-                return True, "emergency_stop"
-            
-            # Max hold time
-            if position_age_seconds >= self.config['max_position_time']:
-                return True, "max_hold_time_exceeded"
-            
-            # Profit lock
-            if pnl_pct >= self.config.get('profit_lock_threshold', 0.003):
-                return True, "profit_lock"
-            
-            # Trailing stop
-            trailing_threshold = self.config.get('trailing_stop_pct', 0.005)
-            if side == "Buy":
-                # For long positions, check if price dropped from high
-                price_change = (current_price - entry_price) / entry_price
-                if price_change < -trailing_threshold:
-                    return True, "trailing_stop"
-            else:
-                # For short positions, check if price rose from low
-                price_change = (entry_price - current_price) / entry_price
-                if price_change < -trailing_threshold:
-                    return True, "trailing_stop"
-            
-            return False, "hold"
-            
-        except Exception as e:
-            print(f"❌ Position management error: {e}")
-            return True, "error"
+        pnl_pct = unrealized_pnl / entry_price if entry_price > 0 else 0
+        
+        if pnl_pct <= -self.config['emergency_stop_pct']:
+            return True, "emergency_stop"
+        
+        if position_age_seconds >= self.config['max_position_time']:
+            return True, "max_hold_time_exceeded"
+        
+        if pnl_pct >= self.config.get('profit_lock_threshold', 0.003):
+            return True, "profit_lock"
+        
+        trailing_threshold = self.config.get('trailing_stop_pct', 0.005)
+        price_change = (current_price - entry_price) / entry_price if side == "Buy" else (entry_price - current_price) / entry_price
+        
+        if price_change < -trailing_threshold:
+            return True, "trailing_stop"
+        
+        return False, "hold"
     
     def get_take_profit_price(self, entry_price, stop_price, side):
         """Calculate take profit price based on reward ratio"""
-        try:
-            risk_distance = abs(entry_price - stop_price)
-            reward_distance = risk_distance * self.config['reward_ratio']
-            
-            if side == "Buy":
-                return entry_price + reward_distance
-            else:
-                return entry_price - reward_distance
-                
-        except Exception as e:
-            print(f"❌ Take profit calculation error: {e}")
-            return entry_price
+        risk_distance = abs(entry_price - stop_price)
+        reward_distance = risk_distance * self.config['reward_ratio']
+        
+        return entry_price + reward_distance if side == "Buy" else entry_price - reward_distance
     
     def update_config(self, new_config):
         """Update configuration"""
