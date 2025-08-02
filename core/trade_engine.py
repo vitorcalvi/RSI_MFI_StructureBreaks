@@ -326,8 +326,8 @@ class TradeEngine:
             c = self.strategy.config; er = self.exit_reasons
 
             print("⚙️  STRATEGY SETUP\n" + "─"*w)
-            print(f"📊 RSI({c['rsi_length']}) MFI({c['mfi_length']}) │ 🔥 Cooldown: {c['cooldown_seconds']}s │ ⚡ Mode: ULTRA-AGGRESSIVE")
-            print(f"📈 Uptrend: ≤{c['uptrend_oversold']} │ 📉 Downtrend: ≥{c['downtrend_overbought']} │ ⚖️ Neutral: {c['neutral_oversold']}-{c['neutral_overbought']}")
+            print(f"📊 RSI({c['rsi_length']}) MFI({c['mfi_length']}) │ 🔥 Cooldown: {c['cooldown_seconds']}s  │ ⚡ Mode: ULTRA-AGGRESSIVE")
+            print(f"📈 Uptrend: ≤{c['uptrend_oversold']}  │ 📉 Downtrend: ≥{c['downtrend_overbought']} │ ⚖️ Neutral: {c['neutral_oversold']}-{c['neutral_overbought']}")
             print("─"*w + "\n")
 
             print("📊  EXIT REASONS SUMMARY\n" + "─"*w)
