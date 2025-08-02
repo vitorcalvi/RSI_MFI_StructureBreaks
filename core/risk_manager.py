@@ -19,8 +19,9 @@ Values Reasoning:
 class RiskManager:
     def __init__(self):
         self.config = {
-    'fixed_position_usdt': 7500,       # Fixed position size - optimized for 1-min $5-8 moves
-    'fixed_break_even_threshold': 12,  # Min profit to close - covers fees + small profit
+    'fixed_position_usdt': 9091,       # Fixed position size - optimized for 1-min $5-8 moves
+    # Round Market fee 0.11% 
+    'fixed_break_even_threshold': 10,  # Min profit to close - covers fees + small profit
     'leverage': 10,                    # Standard leverage
     'reward_ratio': 1.5,              # Risk/reward for 1-min scalping
     'max_position_time': 180,          # 3min max hold for 1-min signals
