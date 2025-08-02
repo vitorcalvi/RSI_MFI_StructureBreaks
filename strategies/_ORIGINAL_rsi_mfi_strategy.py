@@ -46,18 +46,17 @@ class RSIMFIStrategy:
     
     def __init__(self):
         self.config = {
-            # STRESS TEST PARAMETERS - VERY AGGRESSIVE
-            "rsi_length": 3,                    # Faster signals (was 5)
-            "mfi_length": 3,                    # Faster signals (was 5)
-            "uptrend_oversold": 55,             # Much higher threshold (was 45)
-            "uptrend_mfi_threshold": 70,        # Higher threshold (was 60)
-            "downtrend_overbought": 45,         # Much lower threshold (was 55)
-            "neutral_oversold": 50,             # Much higher (was 40)
-            "neutral_mfi_threshold": 50,        # Much higher (was 35)
-            "neutral_overbought": 50,           # Much lower (was 60)
-            "cooldown_seconds": 0.1,            # Very fast (was 0.5)
-            "short_rsi_minimum": 60,            # Lower threshold (was 70)
-            "short_mfi_threshold": 65,          # Lower threshold (was 80)
+            "rsi_length": 5,
+            "mfi_length": 5,
+            "uptrend_oversold": 45,
+            "uptrend_mfi_threshold": 60,
+            "downtrend_overbought": 55,
+            "neutral_oversold": 40,
+            "neutral_mfi_threshold": 35,
+            "neutral_overbought": 60,
+            "cooldown_seconds": 0.5,
+            "short_rsi_minimum": 70,
+            "short_mfi_threshold": 80,
             "target_profit_usdt": 15,
             "max_hold_seconds": 180,
             "short_position_reduction": 0.7
@@ -116,30 +115,48 @@ class RSIMFIStrategy:
     
     def detect_trend(self, data):
         """
-        STRESS TEST VERSION - Very sensitive trend detection
+        Fast trend detection for scalping context
         
-        Much lower thresholds to trigger trend changes frequently
-        for stress testing the bot's signal generation and handling
+        METHOD:
+        • Uses 5/10/20 EMA alignment for quick trend identification
+        • Requires 0.05% momentum confirmation (realistic for 1-min scalping)
+        • 20-period lookback (sufficient for intraday trends)
+        
+        TREND STATES:
+        1. Strong Uptrend: EMA5 > EMA10 > EMA20 + positive momentum
+           → Safe to buy dips, avoid shorts
+           
+        2. Strong Downtrend: EMA5 < EMA10 < EMA20 + negative momentum  
+           → Safe to sell rallies, avoid longs
+           
+        3. Neutral: Mixed EMA signals or low momentum
+           → Trade reversals only, be more selective
+        
+        SCALPING RATIONALE:
+        • Fast EMAs catch trend changes within 10-20 minutes
+        • Previous logs showed 94% "neutral" → now more decisive
+        • Momentum filter prevents whipsaw in sideways markets
+        • Prevents counter-trend trades that led to emergency stops
         """
-        if len(data) < 10:  # Reduced from 20 for faster signals
+        if len(data) < 20:
             return 'neutral'
         
         close = data['close']
         
-        # Very fast EMAs for aggressive signals
-        ema3 = close.ewm(span=3).mean().iloc[-1]
-        ema7 = close.ewm(span=7).mean().iloc[-1]
-        ema15 = close.ewm(span=15).mean().iloc[-1]
+        # Fast EMAs for scalping
+        ema5 = close.ewm(span=5).mean().iloc[-1]
+        ema10 = close.ewm(span=10).mean().iloc[-1]
+        ema20 = close.ewm(span=20).mean().iloc[-1]
         
         current_price = close.iloc[-1]
         
-        # Very low momentum thresholds for stress testing
-        momentum = (current_price - close.iloc[-2]) / close.iloc[-2]  # 2 periods only
+        # Quick momentum check (3 periods for HF)
+        momentum = (current_price - close.iloc[-3]) / close.iloc[-3]
         
-        # STRESS TEST: Very sensitive trend detection
-        if ema3 > ema7 > ema15 and current_price > ema3 and momentum > 0.0001:  # Was 0.0005
+        # Fast trend detection for scalping
+        if ema5 > ema10 > ema20 and current_price > ema5 and momentum > 0.0005:
             return 'strong_uptrend'
-        if ema3 < ema7 < ema15 and current_price < ema3 and momentum < -0.0001:  # Was -0.0005
+        if ema5 < ema10 < ema20 and current_price < ema5 and momentum < -0.0005:
             return 'strong_downtrend'
         
         return 'neutral'
@@ -252,15 +269,15 @@ class RSIMFIStrategy:
             if mfi < self.config['short_mfi_threshold'] or rsi < self.config['short_rsi_minimum']:
                 return None
         
-        # Calculate confidence - STRESS TEST: Lower requirements
+        # Calculate confidence - boost for proven uptrend longs
         rsi_strength = abs(50 - rsi)
         mfi_strength = abs(50 - mfi)
-        base_confidence = (rsi_strength + mfi_strength) * 1.5  # Reduced multiplier
+        base_confidence = (rsi_strength + mfi_strength) * 2
         
         if action == 'BUY' and trend == 'strong_uptrend':
-            base_confidence *= 1.1  # Reduced boost for stress testing
+            base_confidence *= 1.2  # 20% boost for proven strategy
         
-        confidence = min(95, max(50, base_confidence))  # Lower minimum (was 70)
+        confidence = min(95, max(70, base_confidence))
         
         # Calculate target distance for profit estimation
         target_distance = stop_distance * 2.0  # Approximate 2:1 reward ratio
