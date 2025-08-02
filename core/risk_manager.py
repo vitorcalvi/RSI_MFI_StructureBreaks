@@ -6,13 +6,13 @@ load_dotenv()
 class RiskManager:
     def __init__(self):
         self.config = {
-            'fixed_position_usdt': 10000.0,
-            'leverage': 10,
-            'reward_ratio': 2.5,
-            'max_position_time': 75,
-            'fixed_profit_lock_threshold': 11,
-            'emergency_stop_pct': 0.006
-        }
+    'fixed_position_usdt': 7500,
+    'fixed_break_even_threshold': 12,
+    'leverage': 10,
+    'reward_ratio': 1.5,
+    'max_position_time': 180,
+    'emergency_stop_pct': 0.006
+}
         self.symbol = os.getenv('TRADING_SYMBOL')
     
     def validate_trade(self, signal, balance, current_price):
@@ -48,8 +48,8 @@ class RiskManager:
         if position_age_seconds >= self.config['max_position_time']:
             return True, "max_hold_time_exceeded"
         
-        # Fixed profit lock threshold ($11)
-        if unrealized_pnl >= self.config['fixed_profit_lock_threshold']:
+        # Fixed take profit threshold ($11)
+        if unrealized_pnl >= self.config['fixed_break_even_threshold']:
             return True, "profit_lock"
         
         return False, "hold"
