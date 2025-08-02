@@ -6,7 +6,7 @@ load_dotenv()
 class RiskManager:
     def __init__(self):
         self.config = {
-            'fixed_position_usdt': 10000.0,    # CRITICAL: DO NOT MODIFY THIS FUNCTION
+            'fixed_position_usdt': 10000.0,   
             'reward_ratio': 2.5,
             'max_position_time': 75,
             'emergency_stop_pct': 0.006,
