@@ -2,6 +2,46 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
+"""
+    High-Frequency RSI/MFI Scalping Strategy
+    
+    STRATEGY OVERVIEW:
+    This strategy combines RSI (Relative Strength Index) and MFI (Money Flow Index) 
+    indicators to identify short-term reversal opportunities in crypto markets.
+    Designed for 1-minute timeframes with 60-180 second hold times.
+    
+    CORE LOGIC:
+    • RSI identifies price momentum extremes (oversold/overbought)
+    • MFI confirms with volume-weighted price analysis  
+    • Trend filter ensures alignment with broader market direction
+    • Fast periods (5) provide quick signals for scalping
+    
+    ENTRY CONDITIONS:
+    1. Uptrend + RSI ≤45 + MFI ≤60 → BUY (dip buying)
+    2. Downtrend + RSI ≥55 + MFI ≥40 → SELL (rally selling)
+    3. Neutral + RSI ≤40 + MFI ≤35 → BUY (reversal)
+    4. Neutral + RSI ≥60 + MFI ≥65 → SELL (reversal)
+    
+    RISK MANAGEMENT:
+    • Structure stops: 0.15% from recent high/low
+    • Emergency stop: 0.6% max loss (risk manager)
+    • Max hold: 180 seconds (3 minutes)
+    • Fixed position: $10K USDT (~2.6 ETH at $3,500)
+    
+    WHY THIS WORKS FOR SCALPING:
+    • Mean reversion: Extreme RSI/MFI often reverse quickly
+    • Volume confirmation: MFI prevents fake breakouts
+    • Trend awareness: Avoids fighting strong directional moves
+    • Tight stops: Limits downside on wrong entries
+    • Quick exits: Captures 0.3-0.8% moves efficiently
+    
+    OPTIMIZED FOR:
+    • ETH/USDT perpetual futures
+    • 1-minute candlestick data
+    • High-volatility sessions (US/EU overlap)
+    • $15+ profit targets (covers fees + profit)
+    """
+
 class RSIMFIStrategy:
     def __init__(self):
         self.config = {
