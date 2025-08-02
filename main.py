@@ -17,7 +17,6 @@ class HFScalpingBot:
     def __init__(self):
         self.engine = TradeEngine()
         self.running = False
-        self.profit_target = 20.0
         
     async def start(self):
         """Start the trading bot"""
@@ -31,7 +30,6 @@ class HFScalpingBot:
         while self.running:
             try:
                 await self.engine.run_cycle()
-                await self._check_profit_target()
                 await asyncio.sleep(0.5)
             except KeyboardInterrupt:
                 break
@@ -40,24 +38,6 @@ class HFScalpingBot:
                 await asyncio.sleep(2)
         
         await self._shutdown()
-    
-    async def _check_profit_target(self):
-        """Check profit target"""
-        if not self.engine.position:
-            return
-        
-        pnl = float(self.engine.position.get('unrealisedPnl', 0))
-        if pnl >= self.profit_target:
-            print(f"🎯 Profit target reached! PnL: ${pnl:.2f}")
-            await self.engine._close_position(f"profit_target_${self.profit_target:.0f}")
-            
-            await self.engine.notifier.send_message(
-                f"🎯 <b>PROFIT TARGET HIT</b>\n\n"
-                f"📊 Symbol: {self.engine.symbol}\n"
-                f"💰 PnL: +${pnl:.2f}\n"
-                f"🎯 Target: ${self.profit_target:.2f}\n"
-                f"⏰ Time: {datetime.now().strftime('%H:%M:%S')}"
-            )
     
     async def _startup(self):
         """Display startup info"""
@@ -70,7 +50,6 @@ class HFScalpingBot:
         print("⚡" * 60)
         print(f"📊 RSI({config['rsi_length']}) + MFI({config['mfi_length']}) | Max Hold: {risk['max_position_time']}s")
         print(f"💰 Position: ${risk['fixed_position_usdt']:,.0f} | Balance: ${balance:,.2f}")
-        print(f"🎯 PROFIT TARGET: ${self.profit_target:.2f}")
         print("-" * 60)
         
         await self.engine.notifier.send_bot_status("started", "HF Scalping Mode Active - Fixed $10K")
