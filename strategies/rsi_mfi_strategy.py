@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import json
 from datetime import datetime
 
 class RSIMFIStrategy:
@@ -55,16 +54,10 @@ class RSIMFIStrategy:
         current_price = close.iloc[-1]
         price_5_ago = close.iloc[-5]
         
-        # Strong uptrend
-        if (ema10 > ema21 > ema50 and 
-            current_price > ema10 > ema21 and 
-            current_price > price_5_ago * 1.001):
+        # Strong trends
+        if (ema10 > ema21 > ema50 and current_price > ema10 > ema21 and current_price > price_5_ago * 1.001):
             return 'strong_uptrend'
-        
-        # Strong downtrend
-        if (ema10 < ema21 < ema50 and 
-            current_price < ema10 < ema21 and 
-            current_price < price_5_ago * 0.999):
+        if (ema10 < ema21 < ema50 and current_price < ema10 < ema21 and current_price < price_5_ago * 0.999):
             return 'strong_downtrend'
         
         return 'neutral'
@@ -102,16 +95,14 @@ class RSIMFIStrategy:
         if action == 'BUY':
             structure_stop = window['low'].min() * 0.998
             level = window['low'].min()
-            signal_type = f"{trend}_buy"
         else:
             structure_stop = window['high'].max() * 1.002
             level = window['high'].max()
-            signal_type = f"{trend}_sell"
         
         return {
             'action': action, 'trend': trend, 'rsi': rsi, 'mfi': mfi,
             'price': price, 'structure_stop': structure_stop, 'level': level,
-            'signal_type': signal_type,
+            'signal_type': f"{trend}_{action.lower()}",
             'confidence': min(95, max(70, abs(50 - rsi) + abs(50 - mfi)))
         }
     

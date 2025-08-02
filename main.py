@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-High-Frequency Crypto Scalping Bot
+High-Frequency Crypto Scalping Bot - Streamlined
 RSI + MFI Strategy with Fixed $10,000 USDT Position Size
 """
 
@@ -25,7 +25,7 @@ class HFScalpingBot:
             print("❌ Failed to connect to exchange")
             return
         
-        await self._display_startup_info()
+        await self._startup()
         self.running = True
         
         while self.running:
@@ -46,35 +46,30 @@ class HFScalpingBot:
         if not self.engine.position:
             return
         
-        current_pnl = float(self.engine.position.get('unrealisedPnl', 0))
-        
-        if current_pnl >= self.profit_target:
-            print(f"🎯 Profit target reached! PnL: ${current_pnl:.2f}")
+        pnl = float(self.engine.position.get('unrealisedPnl', 0))
+        if pnl >= self.profit_target:
+            print(f"🎯 Profit target reached! PnL: ${pnl:.2f}")
             await self.engine._close_position(f"profit_target_${self.profit_target:.0f}")
             
             await self.engine.notifier.send_message(
                 f"🎯 <b>PROFIT TARGET HIT</b>\n\n"
-                f"📊 <b>Symbol:</b> {self.engine.symbol}\n"
-                f"💰 <b>PnL:</b> +${current_pnl:.2f}\n"
-                f"🎯 <b>Target:</b> ${self.profit_target:.2f}\n"
-                f"⏰ <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}"
+                f"📊 Symbol: {self.engine.symbol}\n"
+                f"💰 PnL: +${pnl:.2f}\n"
+                f"🎯 Target: ${self.profit_target:.2f}\n"
+                f"⏰ Time: {datetime.now().strftime('%H:%M:%S')}"
             )
     
-    async def _display_startup_info(self):
+    async def _startup(self):
         """Display startup info"""
         balance = await self.engine.get_account_balance()
-        strategy_info = self.engine.strategy.get_strategy_info()
-        risk_config = self.engine.risk_manager.config
+        config = self.engine.strategy.config
+        risk = self.engine.risk_manager.config
         
         print("⚡" * 60)
         print(f"🚀 {self.engine.symbol} HIGH-FREQUENCY SCALPING BOT")
         print("⚡" * 60)
-        print(f"📊 Strategy: {strategy_info['name']}")
-        print(f"📈 RSI({strategy_info['config']['rsi_length']}) + MFI({strategy_info['config']['mfi_length']})")
-        print(f"⏱️ Max Hold: {risk_config['max_position_time']}s")
-        print(f"💰 Position Size: ${risk_config['fixed_position_usdt']:,.0f} USDT")
-        print(f"🎯 Reward: {risk_config['reward_ratio']}:1")
-        print(f"💵 Balance: ${balance:,.2f}")
+        print(f"📊 RSI({config['rsi_length']}) + MFI({config['mfi_length']}) | Max Hold: {risk['max_position_time']}s")
+        print(f"💰 Position: ${risk['fixed_position_usdt']:,.0f} | Balance: ${balance:,.2f}")
         print(f"🎯 PROFIT TARGET: ${self.profit_target:.2f}")
         print("-" * 60)
         
@@ -92,11 +87,9 @@ class HFScalpingBot:
         print("✅ Bot stopped")
 
 def _signal_handler(signum, frame):
-    """Handle signals"""
     raise KeyboardInterrupt
 
 def main():
-    """Main entry point"""
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
     

@@ -1,6 +1,7 @@
 import os
 import asyncio
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from pybit.unified_trading import HTTP
 from dotenv import load_dotenv
@@ -31,13 +32,9 @@ class TradeEngine:
         self.trade_id = 0
         
         self.exit_reasons = {
-            'profit_target_$20': 0, 
-            'emergency_stop': 0, 
-            'max_hold_time': 0,
-            'profit_lock': 0, 
-            'position_closed': 0,
-            'bot_shutdown': 0, 
-            'manual_exit': 0
+            'profit_target_$20': 0, 'emergency_stop': 0, 'max_hold_time': 0,
+            'profit_lock': 0, 'trailing_stop': 0, 'position_closed': 0,
+            'bot_shutdown': 0, 'manual_exit': 0
         }
         
         self._set_symbol_rules()
@@ -46,13 +43,11 @@ class TradeEngine:
     
     def _set_symbol_rules(self):
         """Set symbol-specific trading rules"""
-        symbol_rules = {
-            'ETH': ('0.01', 0.01), 
-            'BTC': ('0.001', 0.001), 
-            'ADA': ('1', 1.0)
+        rules = {
+            'ETH': ('0.01', 0.01), 'BTC': ('0.001', 0.001), 'ADA': ('1', 1.0)
         }
         
-        for key, (step, min_qty) in symbol_rules.items():
+        for key, (step, min_qty) in rules.items():
             if key in self.symbol:
                 self.qty_step, self.min_qty = step, min_qty
                 return
@@ -67,28 +62,9 @@ class TradeEngine:
                 api_key=self.api_key,
                 api_secret=self.api_secret
             )
-            info = self.exchange.get_server_time()
-            
-            if info.get('retCode') == 0:
-                # Set leverage
-                self._set_leverage()
-                return True
-            return False
+            return self.exchange.get_server_time().get('retCode') == 0
         except:
             return False
-    
-    def _set_leverage(self):
-        """Set leverage for the symbol"""
-        try:
-            leverage = self.risk_manager.get_leverage()
-            self.exchange.set_leverage(
-                category="linear",
-                symbol=self.symbol,
-                buyLeverage=str(leverage),
-                sellLeverage=str(leverage)
-            )
-        except:
-            pass
     
     def format_quantity(self, qty):
         """Format quantity according to exchange rules"""
@@ -315,8 +291,46 @@ class TradeEngine:
             self._track_exit_reason('position_closed')
             self._log_trade("EXIT", price, reason="position_closed", pnl=pnl)
     
+    def _calculate_momentum(self):
+        """Calculate market momentum indicators"""
+        if len(self.price_data) < 20:
+            return {'trend': 'NEUTRAL', 'strength': 0, 'direction': '→'}
+        
+        close = self.price_data['close']
+        
+        # Price momentum
+        momentum_5 = ((close.iloc[-1] - close.iloc[-5]) / close.iloc[-5]) * 100
+        momentum_20 = ((close.iloc[-1] - close.iloc[-20]) / close.iloc[-20]) * 100
+        
+        # Volume momentum
+        volume = self.price_data['volume']
+        vol_avg = volume.tail(20).mean()
+        vol_current = volume.iloc[-1]
+        vol_momentum = ((vol_current - vol_avg) / vol_avg) * 100 if vol_avg > 0 else 0
+        
+        # Determine trend strength
+        if abs(momentum_5) > 2 or abs(momentum_20) > 5:
+            strength = min(100, max(abs(momentum_5) * 20, abs(momentum_20) * 10))
+            if momentum_5 > 0.5 and momentum_20 > 0:
+                trend, direction = 'BULLISH', '↗'
+            elif momentum_5 < -0.5 and momentum_20 < 0:
+                trend, direction = 'BEARISH', '↘'
+            else:
+                trend, direction = 'MIXED', '↕'
+        else:
+            trend, direction, strength = 'NEUTRAL', '→', 0
+        
+        return {
+            'trend': trend,
+            'strength': strength,
+            'direction': direction,
+            'momentum_5m': momentum_5,
+            'momentum_20m': momentum_20,
+            'volume_strength': min(100, max(0, vol_momentum))
+        }
+    
     def _display_status(self):
-        """Display status"""
+        """Display enhanced status with market momentum"""
         try:
             price = float(self.price_data['close'].iloc[-1])
             time = self.price_data.index[-1].strftime('%H:%M:%S')
@@ -333,12 +347,19 @@ class TradeEngine:
 
             print("⚙️  STRATEGY SETUP\n" + "─"*w)
             print(f"📊 RSI({c['rsi_length']}) MFI({c['mfi_length']}) │ 🔥 Cooldown: {c['cooldown_seconds']}s  │ ⚡ Mode: FIXED-SIZE")
-            print(f"💰 Position Size: $10,000 USDT │ 🔺 Leverage: {self.risk_manager.get_leverage()}x │ 📈 Uptrend: ≤{c['uptrend_oversold']}  │ 📉 Downtrend: ≥{c['downtrend_overbought']}")
+            print(f"💰 Position Size: $10,000 USDT │ 📈 Uptrend: ≤{c['uptrend_oversold']}  │ 📉 Downtrend: ≥{c['downtrend_overbought']}")
+            print("─"*w + "\n")
+
+            # Market Momentum Section
+            momentum = self._calculate_momentum()
+            print("📈  MARKET MOMENTUM\n" + "─"*w)
+            print(f"🎯 Trend: {momentum['trend']:<8} │ 💪 Strength: {momentum['strength']:>3.0f}% │ {momentum['direction']} Direction")
+            print(f"⚡ 5min: {momentum['momentum_5m']:>+5.2f}% │ 📊 20min: {momentum['momentum_20m']:>+5.2f}% │ 📈 Volume: {momentum['volume_strength']:>3.0f}%")
             print("─"*w + "\n")
 
             print("📊  EXIT REASONS SUMMARY\n" + "─"*w)
             print(f"🎯 profit_target_$20 : {er['profit_target_$20']:2d} │ 🚨 emergency_stop : {er['emergency_stop']:2d} │ ⏰ max_hold_time   : {er['max_hold_time']:2d}")
-            print(f"💰 profit_lock       : {er['profit_lock']:2d} │ 🔄 position_closed : {er['position_closed']:2d} │ 🛑 bot_shutdown    : {er['bot_shutdown']:2d}")
+            print(f"💰 profit_lock       : {er['profit_lock']:2d} │ 📉 trailing_stop  : {er['trailing_stop']:2d} │ 🔄 position_closed : {er['position_closed']:2d}")
             print("─"*w + "\n")
 
             print(f"⏰ {time}   |   💰 ${price_formatted}")
