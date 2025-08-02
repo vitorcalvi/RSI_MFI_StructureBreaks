@@ -32,13 +32,14 @@ class TradeEngine:
         self.price_data = pd.DataFrame()
         self.trade_id = 0
         
+        # Use actual config values from risk manager
+        profit_target = self.risk_manager.config['fixed_break_even_threshold']
         self.exit_reasons = {
-            'profit_target_$20': 0, 'emergency_stop': 0, 'max_hold_time': 0,
+            f'profit_target_${profit_target}': 0, 'emergency_stop': 0, 'max_hold_time': 0,
             'profit_lock': 0, 'trailing_stop': 0, 'position_closed': 0,
             'bot_shutdown': 0, 'manual_exit': 0
         }
         
-        # Track signal rejections for debugging
         self.rejections = {
             'extreme_rsi': 0, 'extreme_mfi': 0, 'zero_volume': 0,
             'counter_trend': 0, 'low_confidence': 0, 'total_signals': 0
@@ -254,7 +255,7 @@ class TradeEngine:
         if not balance:
             return
         
-        # Enhanced signal validation
+        # Enhanced signal validation using strategy config
         is_valid, reason = self._validate_enhanced_signal(signal, market_data, current_price)
         if not is_valid:
             print(f"❌ Trade rejected: {reason}")
@@ -285,10 +286,13 @@ class TradeEngine:
             pass
     
     def _validate_enhanced_signal(self, signal, market_data, current_price):
-        """Enhanced signal validation to prevent bad entries"""
+        """Enhanced signal validation using strategy config values"""
         rsi = signal.get('rsi', 50)
         mfi = signal.get('mfi', 50)
         side = signal.get('action', '')
+        
+        # Use strategy config for validation thresholds
+        strategy_config = self.strategy.config
         
         # Reject extreme RSI values (likely calculation errors)
         if rsi < 5 or rsi > 95:
@@ -305,14 +309,14 @@ class TradeEngine:
             self.rejections['zero_volume'] += 1
             return False, "Zero volume detected"
         
-        # Prevent counter-trend entries (basic sanity check)
-        if side == 'SELL' and rsi < 60:  # Don't short when RSI < 60
+        # Use strategy config for counter-trend validation
+        if side == 'SELL' and rsi < strategy_config['short_rsi_minimum']:
             self.rejections['counter_trend'] += 1
-            return False, f"RSI {rsi:.1f} too low for short"
+            return False, f"RSI {rsi:.1f} too low for short (min: {strategy_config['short_rsi_minimum']})"
         
-        if side == 'BUY' and rsi > 40:   # Don't buy when RSI > 40  
+        if side == 'BUY' and rsi > strategy_config['uptrend_oversold']:
             self.rejections['counter_trend'] += 1
-            return False, f"RSI {rsi:.1f} too high for long"
+            return False, f"RSI {rsi:.1f} too high for long (max: {strategy_config['uptrend_oversold']})"
         
         # Require reasonable confidence
         confidence = signal.get('confidence', 0)
@@ -351,9 +355,12 @@ class TradeEngine:
             pass
     
     def _track_exit_reason(self, reason):
-        """Track exit reason"""
-        if 'profit_target' in reason:
-            self.exit_reasons['profit_target_$20'] += 1
+        """Track exit reason using actual config values"""
+        profit_target = self.risk_manager.config['fixed_break_even_threshold']
+        profit_key = f'profit_target_${profit_target}'
+        
+        if 'profit_target' in reason or 'profit_lock' in reason:
+            self.exit_reasons[profit_key] += 1
         elif reason in self.exit_reasons:
             self.exit_reasons[reason] += 1
         else:
@@ -409,7 +416,7 @@ class TradeEngine:
             pass
 
     def _display_status(self):
-        """Display enhanced status with market momentum"""
+        """Display enhanced status using actual config values"""
         try:
             price = float(self.price_data['close'].iloc[-1])
             time = self.price_data.index[-1].strftime('%H:%M:%S')
@@ -423,11 +430,13 @@ class TradeEngine:
             w = 77
             print(f"{'='*w}\n⚡  {symbol_display} HIGH-FREQUENCY SCALPING BOT\n{'='*w}\n")
             
-            # Strategy setup
-            c, er = self.strategy.config, self.exit_reasons
+            # Strategy setup - use actual config values
+            strategy_config = self.strategy.config
+            risk_config = self.risk_manager.config
+            
             print("⚙️  STRATEGY SETUP\n" + "─"*w)
-            print(f"📊 RSI({c['rsi_length']}) MFI({c['mfi_length']}) │ 🔥 Cooldown: {c['cooldown_seconds']}s  │ ⚡ Mode: FIXED-SIZE")
-            print(f"💰 Position Size: $10,000 USDT │ 📈 Uptrend: ≤{c['uptrend_oversold']}  │ 📉 Downtrend: ≥{c['downtrend_overbought']}")
+            print(f"📊 RSI({strategy_config['rsi_length']}) MFI({strategy_config['mfi_length']}) │ 🔥 Cooldown: {strategy_config['cooldown_seconds']}s  │ ⚡ Mode: FIXED-SIZE")
+            print(f"💰 Position Size: ${risk_config['fixed_position_usdt']:,} USDT │ 📈 Uptrend: ≤{strategy_config['uptrend_oversold']}  │ 📉 Downtrend: ≥{strategy_config['downtrend_overbought']}")
             print("─"*w + "\n")
 
             # Market momentum
@@ -438,13 +447,15 @@ class TradeEngine:
 
             # Exit reasons and rejections
             print("📊  EXIT REASONS & SIGNAL FILTERS\n" + "─"*w)
-            print(f"🎯 profit_target_$20 : {er['profit_target_$20']:2d} │ 🚨 emergency_stop : {er['emergency_stop']:2d} │ ⏰ max_hold_time   : {er['max_hold_time']:2d}")
-            print(f"💰 profit_lock       : {er['profit_lock']:2d} │ 📉 trailing_stop  : {er['trailing_stop']:2d} │ 🔄 position_closed : {er['position_closed']:2d}")
+            profit_target = risk_config['fixed_break_even_threshold']
+            profit_key = f'profit_target_${profit_target}'
             
-            rej = self.rejections
-            if rej['total_signals'] > 0:
-                print(f"🚫 Signals rejected  : {rej['extreme_rsi']:2d} RSI │ {rej['extreme_mfi']:2d} MFI │ {rej['zero_volume']:2d} Vol │ {rej['counter_trend']:2d} Trend")
-                print(f"📈 Signal rate       : {self.trade_id}/{rej['total_signals']} accepted ({(self.trade_id/rej['total_signals']*100):.1f}%)")
+            print(f"🎯 {profit_key:<17} : {self.exit_reasons[profit_key]:2d} │ 🚨 emergency_stop : {self.exit_reasons['emergency_stop']:2d} │ ⏰ max_hold_time   : {self.exit_reasons['max_hold_time']:2d}")
+            print(f"💰 profit_lock       : {self.exit_reasons['profit_lock']:2d} │ 📉 trailing_stop  : {self.exit_reasons['trailing_stop']:2d} │ 🔄 position_closed : {self.exit_reasons['position_closed']:2d}")
+            
+            if self.rejections['total_signals'] > 0:
+                print(f"🚫 Signals rejected  : {self.rejections['extreme_rsi']:2d} RSI │ {self.rejections['extreme_mfi']:2d} MFI │ {self.rejections['zero_volume']:2d} Vol │ {self.rejections['counter_trend']:2d} Trend")
+                print(f"📈 Signal rate       : {self.trade_id}/{self.rejections['total_signals']} accepted ({(self.trade_id/self.rejections['total_signals']*100):.1f}%)")
             
             print("─"*w + "\n")
 
@@ -462,7 +473,7 @@ class TradeEngine:
                 
                 pnl_pct = (pnl / (float(size) * entry)) * 100 if entry > 0 and size != '0' else 0
                 age = (datetime.now() - self.position_start_time).total_seconds() if self.position_start_time else 0
-                max_hold = self.risk_manager.config['max_position_time']
+                max_hold = risk_config['max_position_time']
                 
                 emoji = "🟢" if side == "Buy" else "🔴"
                 print(f"{emoji} {side} Position: {size} @ ${entry:.2f}")

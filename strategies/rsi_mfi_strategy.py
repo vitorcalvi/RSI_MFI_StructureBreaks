@@ -46,13 +46,20 @@ class RSIMFIStrategy:
     
     def __init__(self):
         self.config = {
-            "rsi_length": 5,                    # 2 → 5 (fast but stable)
-            "mfi_length": 5,                    # 3 → 5 (fast but stable) 
-            "uptrend_oversold": 45,             # Scalping levels
-            "downtrend_overbought": 55,         # Scalping levels
-            "neutral_oversold": 40,             # Aggressive for HF
-            "neutral_overbought": 60,           # Aggressive for HF
-            "cooldown_seconds": 0.5             # Fast signals
+            "rsi_length": 5,
+            "mfi_length": 5,
+            "uptrend_oversold": 45,
+            "uptrend_mfi_threshold": 60,
+            "downtrend_overbought": 55,
+            "neutral_oversold": 40,
+            "neutral_mfi_threshold": 35,
+            "neutral_overbought": 60,
+            "cooldown_seconds": 0.5,
+            "short_rsi_minimum": 70,
+            "short_mfi_threshold": 80,
+            "target_profit_usdt": 15,
+            "max_hold_seconds": 180,
+            "short_position_reduction": 0.7
         }
         self.last_signal_time = None
     
@@ -104,7 +111,7 @@ class RSIMFIStrategy:
         mfi = 100 - (100 / (1 + mfi_ratio))
         
         # Scalping bounds - more restrictive to prevent extremes
-        return mfi.fillna(50.0).clip(15, 85)  # 10-90 → 15-85 (tighter bounds)
+        return mfi.fillna(50.0).clip(15, 85)
     
     def detect_trend(self, data):
         """
@@ -131,7 +138,7 @@ class RSIMFIStrategy:
         • Momentum filter prevents whipsaw in sideways markets
         • Prevents counter-trend trades that led to emergency stops
         """
-        if len(data) < 20:  # Reduced from 50 for HF
+        if len(data) < 20:
             return 'neutral'
         
         close = data['close']
@@ -194,7 +201,7 @@ class RSIMFIStrategy:
         • Only short in extreme distribution conditions
         • Faster exits on shorts (60s max)
         """
-        if len(data) < 20 or self._is_cooldown_active():  # Reduced data requirement
+        if len(data) < 20 or self._is_cooldown_active():
             return None
         
         rsi = self.calculate_rsi(data['close']).iloc[-1]
@@ -211,7 +218,7 @@ class RSIMFIStrategy:
         
         if trend == 'strong_uptrend':
             # KEEP EXACT LOGIC - Working perfectly with 100% win rate!
-            if rsi <= self.config['uptrend_oversold'] and mfi <= 60:
+            if rsi <= self.config['uptrend_oversold'] and mfi <= self.config['uptrend_mfi_threshold']:
                 signal = self._create_signal('BUY', trend, rsi, mfi, price, data)
                 
         elif trend == 'strong_downtrend':
@@ -223,7 +230,7 @@ class RSIMFIStrategy:
                 
         elif trend == 'neutral':
             # Keep successful long logic, restrict short logic
-            if rsi <= self.config['neutral_oversold'] and mfi <= 35:
+            if rsi <= self.config['neutral_oversold'] and mfi <= self.config['neutral_mfi_threshold']:
                 signal = self._create_signal('BUY', trend, rsi, mfi, price, data)
             elif (rsi >= self.config['neutral_overbought'] and 
                   mfi >= self.config['short_mfi_threshold']):
@@ -235,7 +242,7 @@ class RSIMFIStrategy:
         return signal
     
     def _create_signal(self, action, trend, rsi, mfi, price, data, is_short=False):
-        window = data.tail(20)  # Shorter window for HF
+        window = data.tail(20)
         
         if action == 'BUY':
             # Successful long logic - keep exactly as is
@@ -243,7 +250,7 @@ class RSIMFIStrategy:
             level = window['low'].min()
         else:
             # Tighter stops for shorts - crypto bounces violently
-            structure_stop = window['high'].max() * 1.001  # 0.1% vs 0.15%
+            structure_stop = window['high'].max() * 1.001
             level = window['high'].max()
         
         # Validate stop for scalping
@@ -271,6 +278,9 @@ class RSIMFIStrategy:
             base_confidence *= 1.2  # 20% boost for proven strategy
         
         confidence = min(95, max(70, base_confidence))
+        
+        # Calculate target distance for profit estimation
+        target_distance = stop_distance * 2.0  # Approximate 2:1 reward ratio
         
         signal = {
             'action': action,
@@ -326,6 +336,9 @@ class RSIMFIStrategy:
             'performance_notes': {
                 'uptrend_longs': '100% win rate - keep exact logic',
                 'downtrend_shorts': 'Highly restrictive - crypto bias upward',
-                'position_sizing': 'Longs: $10K, Shorts: $7K (30% reduction)'
+                'position_sizing': '$9091 USDT fixed size (10x leverage)',
+                'profit_target': '$15 USDT (covers fees + profit)',
+                'max_hold_time': '180 seconds',
+                'emergency_stop': '0.6% max loss'
             }
         }
