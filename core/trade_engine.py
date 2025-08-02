@@ -331,8 +331,8 @@ class TradeEngine:
             print("─"*w + "\n")
 
             print("📊  EXIT REASONS SUMMARY\n" + "─"*w)
-            print(f"🎯 profit_target_$20 : {er['profit_target_$20']:2d} │ 🚨 emergency_stop : {er['emergency_stop']:2d} │ ⏰ max_hold_time : {er['max_hold_time']:2d}")
-            print(f"💰 profit_lock       : {er['profit_lock']:2d} │ 📉 trailing_stop    : {er['trailing_stop']:2d} │ 🔄 position_closed : {er['position_closed']:2d}")
+            print(f"🎯 profit_target_$20 : {er['profit_target_$20']:2d} │ 🚨 emergency_stop : {er['emergency_stop']:2d} │ ⏰ max_hold_time   : {er['max_hold_time']:2d}")
+            print(f"💰 profit_lock       : {er['profit_lock']:2d} │ 📉 trailing_stop  : {er['trailing_stop']:2d} │ 🔄 position_closed : {er['position_closed']:2d}")
             print("─"*w + "\n")
 
             # Market info

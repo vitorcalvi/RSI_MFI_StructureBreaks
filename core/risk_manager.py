@@ -7,18 +7,18 @@ class RiskManager:
     def __init__(self):
         # Hard-coded risk management parameters
         self.config = {
-            'fixed_risk_pct': 0.005,
-            'reward_ratio': 1.5,
-            'max_position_time': 121,
-            'emergency_stop_pct': 0.02,
-            'profit_lock_threshold': 0.003,
-            'trailing_stop_pct': 0.005,
-            'entry_fee_pct': 0.00055,
-            'exit_fee_pct': 0.00055,
-            'min_balance': 10
-        }
+    'fixed_risk_pct': 0.002,           # Reduced from 0.5% to 0.2%
+    'reward_ratio': 2.5,               # Increased from 1.5 to 2.5
+    'max_position_time': 75,           # Reduced from 121s to 75s
+    'emergency_stop_pct': 0.006,       # Reduced from 2% to 0.6%
+    'profit_lock_threshold': 0.001,    # Reduced from 0.3% to 0.1%
+    'trailing_stop_pct': 0.0015,       # Reduced from 0.5% to 0.15%
+    'entry_fee_pct': 0.00055,          # Keep same
+    'exit_fee_pct': 0.00055,           # Keep same
+    'min_balance': 10                  # Keep same
+}
         
-        self.symbol = os.getenv('TRADING_SYMBOL', 'ADAUSDT')
+        self.symbol = os.getenv('TRADING_SYMBOL')
     
     def validate_trade(self, signal, balance, current_price):
         """Validate if trade should be executed"""
