@@ -338,7 +338,7 @@ class TradeEngine:
             pass
 
     def _display_status(self):
-        """Display status with integrated config parameters"""
+        """Display enhanced status using actual config values"""
         try:
             price = float(self.price_data['close'].iloc[-1])
             time = self.price_data.index[-1].strftime('%H:%M:%S')
@@ -346,27 +346,75 @@ class TradeEngine:
             price_formatted = f"{price:,.2f}".replace(',', ' ')
             market_data = self._get_market_data()
             
+            print("\n" * 50)
+            
+            # Header
+            w = 77
+            print(f"{'='*w}\n⚡  {symbol_display} HIGH-FREQUENCY SCALPING BOT\n{'='*w}\n")
+            
+            # Strategy setup - use actual config values
             strategy_config = self.strategy.config
             risk_config = self.risk_manager.config
-            strategy_info = self.strategy.get_strategy_info()
             
-            w = 77
-            print(f"\n{'='*w}\n⚡  {symbol_display} HIGH-FREQUENCY SCALPING BOT\n{'='*w}\n")
-            
-            # Strategy setup
-            self._print_strategy_section(strategy_info, strategy_config, w)
-            
-            # Risk management
-            self._print_risk_section(risk_config, w)
-            
+            print("⚙️  STRATEGY SETUP\n" + "─"*w)
+            print(f"📊 RSI/MFI High-Frequency Scalping Strategy")
+            print(f"📈 RSI({strategy_config['rsi_length']}) MFI({strategy_config['mfi_length']}) │ 🔥 Cooldown: {strategy_config['cooldown_seconds']}s")
+            print(f"💰 Thresholds: ≤{strategy_config['uptrend_oversold']} Uptrend │ ≥{strategy_config['downtrend_overbought']} Downtrend")
+            print("─"*w + "\n")
+
+            # Risk Management
+            print("🛡️  RISK MANAGEMENT\n" + "─"*w)
+            profit_target = risk_config['fixed_break_even_threshold']
+            print(f"💵 Position Size: ${risk_config['fixed_position_usdt']:,} USDT │ 🎯 Profit Target: ${profit_target} │ ⚡ Leverage: {risk_config['leverage']}x")
+            print(f"📊 Reward Ratio: {risk_config['reward_ratio']}:1")
+            print("─"*w + "\n")
+
             # Market momentum
-            self._print_market_section(market_data, w)
-            
+            print("📈  MARKET MOMENTUM\n" + "─"*w)
+            trend_display = f"{market_data['trend'].replace('_', ' ').title()}"
+            direction_emoji = {"↗": "🟢", "↘": "🔴", "→": "🟡", "↕": "🟠"}.get(market_data['direction'], "🟡")
+            print(f"🎯 Trend: {trend_display:<12} │ 💪 Strength: {market_data['strength']:>3.0f}% │ {market_data['direction']} Direction")
+            print(f"📊 EMA3: {direction_emoji} │ EMA7: {direction_emoji} │ EMA15: {direction_emoji} = {trend_display} {market_data['direction']}")
+            print("─"*w + "\n")
+
             # Exit reasons and rejections
-            self._print_stats_section(risk_config, w)
+            print("📊  EXIT REASONS & SIGNAL FILTERS\n" + "─"*w)
+            profit_key = f'profit_target_${profit_target}'
             
-            # Current status and position
-            self._print_status_section(time, price_formatted, market_data, risk_config)
+            print(f"🎯 {profit_key:<17} : {self.exit_reasons.get(profit_key, 0):2d} │ 🚨 emergency_stop : {self.exit_reasons.get('emergency_stop', 0):2d} │ 💰 profit_lock : {self.exit_reasons.get('profit_lock', 0):2d}")
+            print(f"⏰ max_hold_time     : {self.exit_reasons.get('max_hold_time', 0):2d}")
+            
+            if self.rejections.get('total_signals', 0) > 0:
+                print(f"🚫 Signals rejected  : {self.rejections.get('extreme_rsi', 0):2d} RSI │ {self.rejections.get('extreme_mfi', 0):2d} MFI │ {self.rejections.get('zero_volume', 0):2d} Vol │ {self.rejections.get('counter_trend', 0):2d} Trend")
+                total_signals = self.rejections['total_signals']
+                acceptance_rate = (self.trade_id / total_signals * 100) if total_signals > 0 else 0
+                print(f"📈 Signal rate       : {self.trade_id}/{total_signals} accepted ({acceptance_rate:.1f}%)")
+            
+            print("─"*w + "\n")
+
+            # Current status
+            print(f"⏰ {time}   |   💰 ${price_formatted}")
+            print(f"📈 RSI: {market_data['rsi']:.1f}  |   MFI: {market_data['mfi']:.1f}  |   {trend_display.upper()}{market_data['direction']}")
+            print()
+            
+            # Position info
+            if self.position:
+                pnl = float(self.position.get('unrealisedPnl', 0))
+                entry = float(self.position.get('avgPrice', 0))
+                size = self.position.get('size', '0')
+                side = self.position.get('side', '')
+                
+                age = (datetime.now() - self.position_start_time).total_seconds() if self.position_start_time else 0
+                
+                emoji = "🟢" if side == "Buy" else "🔴"
+                print(f"{emoji} {side} Position: {size} @ ${entry:.2f}")
+                print(f"   PnL: ${pnl:.2f} | Age: {age:.1f}s")
+            else:
+                print("⚡  No Position — scanning…")
+            
+            # Show quick trade analysis
+            self.analyze_recent_trades(7)
+            print("─" * 60)
             
         except Exception as e:
             print(f"❌ Display error: {e}")
