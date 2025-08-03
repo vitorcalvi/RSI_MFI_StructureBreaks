@@ -35,9 +35,8 @@ class TradeEngine:
         # Use actual config values from risk manager
         profit_target = self.risk_manager.config['fixed_break_even_threshold']
         self.exit_reasons = {
-            f'profit_target_${profit_target}': 0, 'emergency_stop': 0, 'max_hold_time': 0,
-            'profit_lock': 0, 'trailing_stop': 0, 'position_closed': 0,
-            'bot_shutdown': 0, 'manual_exit': 0
+            f'profit_target_${profit_target}': 0, 'emergency_stop': 0,
+            'profit_lock': 0
         }
         
         self.rejections = {
@@ -79,57 +78,57 @@ class TradeEngine:
             return f"{qty:.3f}"
     
     def _get_market_data(self):
-        """Get market indicators and momentum in one pass"""
+        """Get market indicators and momentum using strategy's trend detection"""
         if len(self.price_data) < 20:
-            return {'rsi': 50, 'mfi': 50, 'volatility': 0, 'momentum_5m': 0, 'momentum_20m': 0, 
-                   'volume_ratio': 1, 'trend': 'NEUTRAL', 'strength': 0, 'direction': '→'}
+            return {'rsi': 50, 'mfi': 50, 'volatility': 0, 'ema3': 0, 'ema7': 0, 'ema15': 0,
+                   'volume_ratio': 1, 'trend': 'neutral', 'strength': 0, 'direction': '→'}
         
         close = self.price_data['close']
         volume = self.price_data['volume']
         
-        # Get indicators with validation
+        # Get indicators from strategy
         indicators = self.strategy.calculate_indicators(self.price_data)
         rsi = indicators.get('rsi', pd.Series([50])).iloc[-1] if 'rsi' in indicators else 50
         mfi = indicators.get('mfi', pd.Series([50])).iloc[-1] if 'mfi' in indicators else 50
         
-        # Fix impossible indicator values
+        # Validate indicator values
         rsi = max(0, min(100, rsi)) if pd.notna(rsi) else 50
         mfi = max(0, min(100, mfi)) if pd.notna(mfi) else 50
         
-        # Calculate momentum and volatility
-        returns = close.pct_change().tail(10)
-        volatility = returns.std() if len(returns) > 1 else 0
-        momentum_5m = ((close.iloc[-1] - close.iloc[-5]) / close.iloc[-5]) * 100
-        momentum_20m = ((close.iloc[-1] - close.iloc[-20]) / close.iloc[-20]) * 100
+        # Calculate EMAs like strategy does for trend detection
+        ema3 = close.ewm(span=3).mean().iloc[-1]
+        ema7 = close.ewm(span=7).mean().iloc[-1]
+        ema15 = close.ewm(span=15).mean().iloc[-1]
         
-        # Volume ratio with validation
+        # Use strategy's trend detection
+        trend = self.strategy.detect_trend(self.price_data)
+        
+        # Volume validation - simplified
         vol_avg = volume.tail(20).mean()
         current_vol = volume.iloc[-1]
-        volume_ratio = current_vol / vol_avg if vol_avg > 0 and current_vol > 0 else 1
+        volume_ratio = current_vol / vol_avg if vol_avg > 0 and current_vol > 0 else 0
         
-        # Reject trades with zero volume
-        if current_vol == 0 or vol_avg == 0:
-            volume_ratio = 0  # Signal invalid volume
+        # Map strategy trend to display format with strength calculation
+        current_price = close.iloc[-1]
+        momentum = (current_price - close.iloc[-2]) / close.iloc[-2] if len(close) > 2 else 0
         
-        # Trend determination
-        if abs(momentum_5m) > 2 or abs(momentum_20m) > 5:
-            strength = min(100, max(abs(momentum_5m) * 20, abs(momentum_20m) * 10))
-            if momentum_5m > 0.5 and momentum_20m > 0:
-                trend, direction = 'BULLISH', '↗'
-            elif momentum_5m < -0.5 and momentum_20m < 0:
-                trend, direction = 'BEARISH', '↘'
-            else:
-                trend, direction = 'MIXED', '↕'
-        else:
-            trend, direction, strength = 'NEUTRAL', '→', 0
+        if trend == 'strong_uptrend':
+            direction = '↗'
+            strength = min(100, max(abs(momentum) * 5000, 50))  # Convert to percentage
+        elif trend == 'strong_downtrend':
+            direction = '↘'
+            strength = min(100, max(abs(momentum) * 5000, 50))
+        else:  # neutral
+            direction = '→'
+            strength = min(40, max(abs(momentum) * 2500, 10))
         
-        # Volume strength
-        vol_momentum = ((volume.iloc[-1] - vol_avg) / vol_avg) * 100 if vol_avg > 0 else 0
-        volume_strength = min(100, max(0, vol_momentum))
+        # Simple volatility
+        volatility = close.pct_change().tail(10).std() if len(close) > 10 else 0
+        volume_strength = min(100, max(0, ((current_vol - vol_avg) / vol_avg) * 100)) if vol_avg > 0 else 0
         
         return {
             'rsi': rsi, 'mfi': mfi, 'volatility': volatility,
-            'momentum_5m': momentum_5m, 'momentum_20m': momentum_20m, 'volume_ratio': volume_ratio,
+            'ema3': ema3, 'ema7': ema7, 'ema15': ema15, 'volume_ratio': volume_ratio,
             'trend': trend, 'strength': strength, 'direction': direction, 'volume_strength': volume_strength
         }
     
@@ -146,7 +145,7 @@ class TradeEngine:
                 'side': signal.get('action', ''), 'price': round(price, 2), 'size': kwargs.get('quantity', ''),
                 'rsi': round(signal.get('rsi', 0), 1), 'mfi': round(signal.get('mfi', 0), 1),
                 'trend': signal.get('trend', 'neutral'), 'confidence': round(signal.get('confidence', 0), 1),
-                'volatility': round(market_data['volatility'], 3), 'momentum': round(market_data['momentum_5m'], 2),
+                'volatility': round(market_data['volatility'], 3), 'ema3': round(market_data['ema3'], 2),
                 'volume_ratio': round(market_data['volume_ratio'], 2)
             }
         else:
@@ -247,7 +246,7 @@ class TradeEngine:
             await self._close_position(reason)
     
     async def _execute_trade(self, signal):
-        """Execute trade with enhanced validation"""
+        """Execute trade with validation"""
         current_price = float(self.price_data['close'].iloc[-1])
         balance = await self.get_account_balance()
         market_data = self._get_market_data()
@@ -255,13 +254,13 @@ class TradeEngine:
         if not balance:
             return
         
-        # Enhanced signal validation using strategy config
-        is_valid, reason = self._validate_enhanced_signal(signal, market_data, current_price)
+        # Streamlined signal validation
+        is_valid, reason = self._validate_signal(signal, market_data)
         if not is_valid:
             print(f"❌ Trade rejected: {reason}")
             return
         
-        # Original risk manager validation
+        # Risk manager validation
         is_valid, _ = self.risk_manager.validate_trade(signal, balance, current_price)
         if not is_valid:
             return
@@ -285,41 +284,38 @@ class TradeEngine:
         except:
             pass
     
-    def _validate_enhanced_signal(self, signal, market_data, current_price):
-        """Enhanced signal validation using strategy config values"""
+    def _validate_signal(self, signal, market_data):
+        """Streamlined signal validation using strategy config"""
         rsi = signal.get('rsi', 50)
         mfi = signal.get('mfi', 50)
         side = signal.get('action', '')
-        
-        # Use strategy config for validation thresholds
+        confidence = signal.get('confidence', 0)
         strategy_config = self.strategy.config
         
-        # Reject extreme RSI values (likely calculation errors)
+        # Extreme values check
         if rsi < 5 or rsi > 95:
             self.rejections['extreme_rsi'] += 1
             return False, f"Extreme RSI {rsi:.1f}"
         
-        # Reject extreme MFI values
         if mfi < 5 or mfi > 95:
             self.rejections['extreme_mfi'] += 1
             return False, f"Extreme MFI {mfi:.1f}"
         
-        # Reject zero volume conditions
+        # Volume check
         if market_data['volume_ratio'] == 0:
             self.rejections['zero_volume'] += 1
             return False, "Zero volume detected"
         
-        # Use strategy config for counter-trend validation
+        # Strategy-specific validation
         if side == 'SELL' and rsi < strategy_config['short_rsi_minimum']:
             self.rejections['counter_trend'] += 1
-            return False, f"RSI {rsi:.1f} too low for short (min: {strategy_config['short_rsi_minimum']})"
+            return False, f"RSI {rsi:.1f} too low for short"
         
         if side == 'BUY' and rsi > strategy_config['uptrend_oversold']:
             self.rejections['counter_trend'] += 1
-            return False, f"RSI {rsi:.1f} too high for long (max: {strategy_config['uptrend_oversold']})"
+            return False, f"RSI {rsi:.1f} too high for long"
         
-        # Require reasonable confidence
-        confidence = signal.get('confidence', 0)
+        # Confidence check
         if confidence < 70:
             self.rejections['low_confidence'] += 1
             return False, f"Low confidence {confidence:.1f}"
@@ -364,11 +360,7 @@ class TradeEngine:
         elif reason in self.exit_reasons:
             self.exit_reasons[reason] += 1
         else:
-            reason_map = {
-                'max_hold_time_exceeded': 'max_hold_time',
-                'Bot shutdown': 'bot_shutdown', 'Manual': 'manual_exit'
-            }
-            self.exit_reasons[reason_map.get(reason, 'manual_exit')] += 1
+            self.exit_reasons['manual_exit'] += 1
     
     async def get_account_balance(self):
         """Get account balance"""
@@ -416,7 +408,7 @@ class TradeEngine:
             pass
 
     def _display_status(self):
-        """Display enhanced status using actual config values"""
+        """Display status with integrated config parameters"""
         try:
             price = float(self.price_data['close'].iloc[-1])
             time = self.price_data.index[-1].strftime('%H:%M:%S')
@@ -424,34 +416,69 @@ class TradeEngine:
             price_formatted = f"{price:,.2f}".replace(',', ' ')
             market_data = self._get_market_data()
             
-            print("\n" * 50)
+            # Get integrated config values
+            strategy_config = self.strategy.config
+            risk_config = self.risk_manager.config
+            strategy_info = self.strategy.get_strategy_info()
             
-            # Header
+            print("\n" * 50)
             w = 77
             print(f"{'='*w}\n⚡  {symbol_display} HIGH-FREQUENCY SCALPING BOT\n{'='*w}\n")
             
-            # Strategy setup - use actual config values
-            strategy_config = self.strategy.config
-            risk_config = self.risk_manager.config
-            
+            # Strategy setup with actual config values from strategy
             print("⚙️  STRATEGY SETUP\n" + "─"*w)
-            print(f"📊 RSI({strategy_config['rsi_length']}) MFI({strategy_config['mfi_length']}) │ 🔥 Cooldown: {strategy_config['cooldown_seconds']}s  │ ⚡ Mode: FIXED-SIZE")
+            print(f"📊 {strategy_info['name']}")
+            print(f"📈 RSI({strategy_config['rsi_length']}) MFI({strategy_config['mfi_length']}) │ 🔥 Cooldown: {strategy_config['cooldown_seconds']}s")
             print(f"💰 Position Size: ${risk_config['fixed_position_usdt']:,} USDT │ 📈 Uptrend: ≤{strategy_config['uptrend_oversold']}  │ 📉 Downtrend: ≥{strategy_config['downtrend_overbought']}")
             print("─"*w + "\n")
 
-            # Market momentum
-            print("📈  MARKET MOMENTUM\n" + "─"*w)
-            print(f"🎯 Trend: {market_data['trend']:<8} │ 💪 Strength: {market_data['strength']:>3.0f}% │ {market_data['direction']} Direction")
-            print(f"⚡ 5min: {market_data['momentum_5m']:>+5.2f}% │ 📊 20min: {market_data['momentum_20m']:>+5.2f}% │ 📈 Volume: {market_data['volume_strength']:>3.0f}%")
+            # Risk Management section from risk_manager.py
+            print("🛡️  RISK MANAGEMENT\n" + "─"*w)
+            print(f"💵 Position Size: ${risk_config['fixed_position_usdt']:,} USDT │ 🎯 Profit Target: ${risk_config['fixed_break_even_threshold']} │ ⚡ Leverage: {risk_config['leverage']}x")
+            print(f"⏰ Max Hold: {risk_config['max_position_time']}s │ 🚨 Emergency Stop: {risk_config['emergency_stop_pct']*100:.1f}% │ 📊 Reward Ratio: {risk_config['reward_ratio']}:1")
             print("─"*w + "\n")
 
-            # Exit reasons and rejections
+            # Market momentum with strategy trend detection
+            print("📈  MARKET MOMENTUM\n" + "─"*w)
+            
+            # Format trend display using strategy's detect_trend output
+            trend_display = {
+                'strong_uptrend': 'STRONG UP',
+                'strong_downtrend': 'STRONG DOWN', 
+                'neutral': 'NEUTRAL'
+            }.get(market_data['trend'], market_data['trend'].upper())
+            
+            print(f"🎯 Trend: {trend_display:<10} │ 💪 Strength: {market_data['strength']:>3.0f}% │ {market_data['direction']} Direction")
+            
+            # Show EMA indicators: 🟢 = price above EMA, 🔴 = price below EMA
+            current_price = float(self.price_data['close'].iloc[-1])
+            ema3_indicator = "🟢" if current_price > market_data['ema3'] else "🔴"
+            ema7_indicator = "🟢" if current_price > market_data['ema7'] else "🔴"
+            ema15_indicator = "🟢" if current_price > market_data['ema15'] else "🔴"
+            
+            # Determine EMA pattern label
+            ema_pattern = f"{ema3_indicator}{ema7_indicator}{ema15_indicator}"
+            pattern_labels = {
+                "🟢🟢🟢": "Bullish 📈",
+                "🔴🔴🔴": "Bearish 📉", 
+                "🟢🟢🔴": "Weak Bull 📈",
+                "🔴🔴🟢": "Weak Bear 📉",
+                "🟢🔴🟢": "Mixed ↕️",
+                "🔴🟢🔴": "Mixed ↕️",
+                "🟢🔴🔴": "Very Weak 📈",
+                "🔴🟢🟢": "Very Weak 📉"
+            }
+            pattern_label = pattern_labels.get(ema_pattern, "Choppy")
+            
+            print(f"📊 EMA3: {ema3_indicator} │ EMA7: {ema7_indicator} │ EMA15: {ema15_indicator} = {pattern_label}")
+            print("─"*w + "\n")
+
+            # Exit reasons and rejections with actual config values
             print("📊  EXIT REASONS & SIGNAL FILTERS\n" + "─"*w)
             profit_target = risk_config['fixed_break_even_threshold']
             profit_key = f'profit_target_${profit_target}'
             
-            print(f"🎯 {profit_key:<17} : {self.exit_reasons[profit_key]:2d} │ 🚨 emergency_stop : {self.exit_reasons['emergency_stop']:2d} │ ⏰ max_hold_time   : {self.exit_reasons['max_hold_time']:2d}")
-            print(f"💰 profit_lock       : {self.exit_reasons['profit_lock']:2d} │ 📉 trailing_stop  : {self.exit_reasons['trailing_stop']:2d} │ 🔄 position_closed : {self.exit_reasons['position_closed']:2d}")
+            print(f"🎯 {profit_key:<17} : {self.exit_reasons[profit_key]:2d} │ 🚨 emergency_stop : {self.exit_reasons['emergency_stop']:2d} │ 💰 profit_lock : {self.exit_reasons['profit_lock']:2d}")
             
             if self.rejections['total_signals'] > 0:
                 print(f"🚫 Signals rejected  : {self.rejections['extreme_rsi']:2d} RSI │ {self.rejections['extreme_mfi']:2d} MFI │ {self.rejections['zero_volume']:2d} Vol │ {self.rejections['counter_trend']:2d} Trend")
@@ -461,10 +488,18 @@ class TradeEngine:
 
             # Current status
             print(f"⏰ {time}   |   💰 ${price_formatted}")
-            print(f"📈 RSI: {market_data['rsi']:.1f}  |   MFI: {market_data['mfi']:.1f}")
+            
+            # Format trend for current status display  
+            trend_status = {
+                'strong_uptrend': 'STRONG↗',
+                'strong_downtrend': 'STRONG↘',
+                'neutral': 'NEUTRAL'
+            }.get(market_data['trend'], market_data['trend'])
+            
+            print(f"📈 RSI: {market_data['rsi']:.1f}  |   MFI: {market_data['mfi']:.1f}  |   {trend_status}")
             print()
             
-            # Position info
+            # Position info with integrated config
             if self.position:
                 pnl = float(self.position.get('unrealisedPnl', 0))
                 entry = float(self.position.get('avgPrice', 0))

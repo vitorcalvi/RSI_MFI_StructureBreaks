@@ -328,17 +328,3 @@ class RSIMFIStrategy:
         except:
             return {}
     
-    def get_strategy_info(self):
-        """Strategy info with performance notes"""
-        return {
-            'name': 'RSI/MFI Crypto-Optimized Scalping', 
-            'config': self.config,
-            'performance_notes': {
-                'uptrend_longs': '100% win rate - keep exact logic',
-                'downtrend_shorts': 'Highly restrictive - crypto bias upward',
-                'position_sizing': '$9091 USDT fixed size (10x leverage)',
-                'profit_target': '$15 USDT (covers fees + profit)',
-                'max_hold_time': '180 seconds',
-                'emergency_stop': '0.6% max loss'
-            }
-        }
