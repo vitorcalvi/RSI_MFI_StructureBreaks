@@ -34,7 +34,7 @@ class TradeEngine:
         
         # Initialize tracking dictionaries
         profit_target = self.risk_manager.config['fixed_break_even_threshold']
-        self.exit_reasons = {f'profit_target_${profit_target}': 0, 'emergency_stop': 0, 'profit_lock': 0, 'max_hold_time_exceeded': 0}
+        self.exit_reasons = {f'profit_target_${profit_target}': 0, 'emergency_stop': 0, 'profit_lock': 0}
         self.rejections = {'extreme_rsi': 0, 'extreme_mfi': 0, 'zero_volume': 0, 'counter_trend': 0, 'low_confidence': 0, 'total_signals': 0}
         
         self._set_symbol_rules()
@@ -118,12 +118,11 @@ class TradeEngine:
                 'volume_ratio': round(market_data['volume_ratio'], 2)
             }
         else:
-            duration = (datetime.now() - self.position_start_time).total_seconds() if self.position_start_time else 0
             log_data = {
                 'timestamp': timestamp, 'id': self.trade_id, 'action': 'EXIT',
                 'trigger': kwargs.get('reason', '').lower().replace(' ', '_'),
                 'price': round(price, 2), 'pnl': round(kwargs.get('pnl', 0), 2),
-                'hold_seconds': round(duration, 1), 'rsi_exit': round(market_data['rsi'], 1),
+                'rsi_exit': round(market_data['rsi'], 1),
                 'mfi_exit': round(market_data['mfi'], 1)
             }
         
@@ -198,9 +197,8 @@ class TradeEngine:
         entry_price = float(self.position.get('avgPrice', 0))
         side = self.position.get('side', '')
         unrealized_pnl = float(self.position.get('unrealisedPnl', 0))
-        position_age = (datetime.now() - self.position_start_time).total_seconds()
         
-        should_close, reason = self.risk_manager.should_close_position(current_price, entry_price, side, unrealized_pnl, position_age)
+        should_close, reason = self.risk_manager.should_close_position(current_price, entry_price, side, unrealized_pnl)
         if should_close:
             await self._close_position(reason)
     
@@ -282,12 +280,11 @@ class TradeEngine:
             )
             
             if order.get('retCode') == 0:
-                duration = (datetime.now() - self.position_start_time).total_seconds() if self.position_start_time else 0
                 self._track_exit_reason(reason)
                 self._log_trade("EXIT", current_price, reason=reason, pnl=pnl)
                 
                 exit_data = {'trigger': reason, 'rsi': self._get_market_data()['rsi'], 'mfi': self._get_market_data()['mfi']}
-                await self.notifier.send_trade_exit(exit_data, current_price, pnl, duration, self.strategy.get_strategy_info())
+                await self.notifier.send_trade_exit(exit_data, current_price, pnl, 0, self.strategy.get_strategy_info())
         except:
             pass
     
@@ -297,8 +294,6 @@ class TradeEngine:
         
         if 'profit_target' in reason or 'profit_lock' in reason:
             self.exit_reasons[profit_key] += 1
-        elif reason == 'max_hold_time_exceeded':
-            self.exit_reasons['max_hold_time_exceeded'] += 1
         elif reason in self.exit_reasons:
             self.exit_reasons[reason] += 1
         else:
@@ -337,9 +332,8 @@ class TradeEngine:
             
             wins = len([t for t in exits if t.get('pnl', 0) > 0])
             avg_pnl = sum(t.get('pnl', 0) for t in exits) / len(exits)
-            avg_hold = sum(t.get('hold_seconds', 0) for t in exits) / len(exits)
             
-            print(f"\n📊 Last {len(exits)} trades: {wins}W/{len(exits)-wins}L | Avg PnL: ${avg_pnl:.2f} | Hold: {avg_hold:.1f}s")
+            print(f"\n📊 Last {len(exits)} trades: {wins}W/{len(exits)-wins}L | Avg PnL: ${avg_pnl:.2f}")
         except:
             pass
 
@@ -389,7 +383,7 @@ class TradeEngine:
         """Print risk management section"""
         print("🛡️  RISK MANAGEMENT\n" + "─"*w)
         print(f"💵 Position Size: ${risk_config['fixed_position_usdt']:,} USDT │ 🎯 Profit Target: ${risk_config['fixed_break_even_threshold']} │ ⚡ Leverage: {risk_config['leverage']}x")
-        print(f"⏰ Max Hold: {risk_config['max_position_time']}s │ 🚨 Emergency Stop: ${risk_config['emergency_stop_amount']:,} │ 📊 Reward Ratio: {risk_config['reward_ratio']}:1")
+        print(f"🚨 Emergency Stop: ${risk_config['emergency_stop_amount']:,} │ 📊 Reward Ratio: {risk_config['reward_ratio']}:1")
         print("─"*w + "\n")
     
     def _print_market_section(self, market_data, w):
@@ -418,7 +412,6 @@ class TradeEngine:
         profit_key = f'profit_target_${risk_config["fixed_break_even_threshold"]}'
         
         print(f"🎯 {profit_key:<17} : {self.exit_reasons[profit_key]:2d} │ 🚨 emergency_stop : {self.exit_reasons['emergency_stop']:2d} │ 💰 profit_lock : {self.exit_reasons['profit_lock']:2d}")
-        print(f"⏰ max_hold_time     : {self.exit_reasons['max_hold_time_exceeded']:2d}")
         
         if self.rejections['total_signals'] > 0:
             print(f"🚫 Signals rejected  : {self.rejections['extreme_rsi']:2d} RSI │ {self.rejections['extreme_mfi']:2d} MFI │ {self.rejections['zero_volume']:2d} Vol │ {self.rejections['counter_trend']:2d} Trend")
@@ -441,12 +434,10 @@ class TradeEngine:
             side = self.position.get('side', '')
             
             pnl_pct = (pnl / (float(size) * entry)) * 100 if entry > 0 and size != '0' else 0
-            age = (datetime.now() - self.position_start_time).total_seconds() if self.position_start_time else 0
-            max_hold = risk_config['max_position_time']
             
             emoji = "🟢" if side == "Buy" else "🔴"
             print(f"{emoji} {side} Position: {size} @ ${entry:.2f}")
-            print(f"   PnL: ${pnl:.2f} ({pnl_pct:+.2f}%) | Age: {age:.1f}s / {max_hold}s")
+            print(f"   PnL: ${pnl:.2f} ({pnl_pct:+.2f}%)")
         else:
             print("⚡  No Position — scanning…")
         

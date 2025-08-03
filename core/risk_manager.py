@@ -12,7 +12,6 @@ class RiskManager:
             'fixed_break_even_threshold': 15,
             'leverage': 10,
             'reward_ratio': 1.5,
-            'max_position_time': 180,
             'emergency_stop_amount': 5000
         }
         self.symbol = os.getenv('TRADING_SYMBOL')
@@ -34,12 +33,9 @@ class RiskManager:
         position_usdt = min(self.config['fixed_position_usdt'], balance * 0.5)
         return round(position_usdt / entry_price, 3)
     
-    def should_close_position(self, current_price, entry_price, side, unrealized_pnl, position_age_seconds):
+    def should_close_position(self, current_price, entry_price, side, unrealized_pnl):
         if unrealized_pnl <= -self.config['emergency_stop_amount']:
             return True, "emergency_stop"
-        
-        if position_age_seconds >= self.config['max_position_time']:
-            return True, "max_hold_time_exceeded"
         
         if unrealized_pnl >= self.config['fixed_break_even_threshold']:
             return True, "profit_lock"
