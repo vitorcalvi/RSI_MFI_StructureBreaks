@@ -27,7 +27,6 @@ class RSIMFIStrategy:
     • Fixed position: 9091 USDT (~2.59 ETH at $3,500)
     • Profit target: $15 USDT (covers $10 fees + $5 profit)
     • Emergency stop: 0.6% max loss (~$55 on 9091 position)
-    • Max hold: 180 seconds (3 minutes)
     • Structure stops: 0.15% from recent high/low
     
     WHY THIS WORKS FOR SCALPING:
@@ -59,7 +58,6 @@ class RSIMFIStrategy:
             "short_rsi_minimum": 60,            # Lower threshold (was 70)
             "short_mfi_threshold": 65,          # Lower threshold (was 80)
             "target_profit_usdt": 15,
-            "max_hold_seconds": 180,
             "short_position_reduction": 0.7
         }
         self.last_signal_time = None
@@ -182,7 +180,7 @@ class RSIMFIStrategy:
         • Maintain 100% uptrend win rate
         • Reduce short frequency by 70%
         • Only short in extreme distribution conditions
-        • Faster exits on shorts (60s max)
+        • Faster exits on shorts
         """
         if len(data) < 20 or self._is_cooldown_active():
             return None
@@ -277,14 +275,12 @@ class RSIMFIStrategy:
             'confidence': round(confidence, 1),
             # Risk Manager Alignment
             'target_profit_usdt': self.config['target_profit_usdt'],
-            'estimated_move_pct': round(target_distance * 100, 2),
-            'max_hold_seconds': self.config['max_hold_seconds']
+            'estimated_move_pct': round(target_distance * 100, 2)
         }
         
         # Add short-specific metadata for risk manager
         if is_short:
             signal['position_size_multiplier'] = self.config['short_position_reduction']
-            signal['max_hold_seconds'] = 60  # Faster exits for shorts
         
         return signal
     
@@ -312,16 +308,29 @@ class RSIMFIStrategy:
             return {}
     
     def get_strategy_info(self):
-        """Strategy info with performance notes"""
+        """Strategy information and configuration details"""
         return {
-            'name': 'RSI/MFI Crypto-Optimized Scalping', 
+            'name': 'RSI/MFI High-Frequency Scalping Strategy',
+            'description': 'RSI and MFI based momentum reversal strategy for crypto scalping',
+            'timeframe': '1-minute',
             'config': self.config,
-            'performance_notes': {
-                'uptrend_longs': '100% win rate - keep exact logic',
-                'downtrend_shorts': 'Highly restrictive - crypto bias upward',
-                'position_sizing': '$9091 USDT fixed size (10x leverage)',
-                'profit_target': '$15 USDT (covers fees + profit)',
-                'max_hold_time': '180 seconds',
-                'emergency_stop': '0.6% max loss'
+            'indicators': {
+                'rsi_length': self.config['rsi_length'],
+                'mfi_length': self.config['mfi_length']
+            },
+            'thresholds': {
+                'uptrend_oversold': self.config['uptrend_oversold'],
+                'uptrend_mfi_threshold': self.config['uptrend_mfi_threshold'],
+                'downtrend_overbought': self.config['downtrend_overbought'],
+                'neutral_oversold': self.config['neutral_oversold'],
+                'neutral_mfi_threshold': self.config['neutral_mfi_threshold'],
+                'neutral_overbought': self.config['neutral_overbought'],
+                'short_rsi_minimum': self.config['short_rsi_minimum'],
+                'short_mfi_threshold': self.config['short_mfi_threshold']
+            },
+            'risk_management': {
+                'target_profit_usdt': self.config['target_profit_usdt'],
+                'short_position_reduction': self.config['short_position_reduction'],
+                'cooldown_seconds': self.config['cooldown_seconds']
             }
         }

@@ -83,14 +83,8 @@ class HFScalpingBot:
         print(f"💵 Position Size: ${risk_config['fixed_position_usdt']:,} USDT")
         print(f"🎯 Profit Target: ${risk_config['fixed_break_even_threshold']} USDT")
         print(f"⚡ Leverage: {risk_config['leverage']}x")
-        print(f"⏰ Max Hold Time: {risk_config['max_position_time']}s")
-        print(f"🚨 Emergency Stop: {risk_config['emergency_stop_pct']*100:.1f}%")
         
         # Performance Notes
-        print(f"\n📊 PERFORMANCE NOTES")
-        print("-" * 60)
-        for key, note in strategy_info['performance_notes'].items():
-            print(f"• {key.replace('_', ' ').title()}: {note}")
         
         print("\n" + "=" * 60)
         print("🟢 Bot started successfully - Monitoring for signals...")
